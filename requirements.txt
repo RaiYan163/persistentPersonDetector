@@ -1,0 +1,32 @@
+# Person Lock System Requirements
+
+# Core computer vision
+opencv-python>=4.8.0
+numpy>=1.21.0
+
+# Object detection and tracking  
+ultralytics>=8.0.0
+
+# Gesture recognition
+mediapipe>=0.10.0
+
+# Person re-identification
+torchreid>=1.4.0
+torch>=1.12.0
+torchvision>=0.13.0
+
+# Utilities
+urllib3>=1.26.0
+Pillow>=8.3.0
+
+# Optional: For CUDA support (if using GPU)
+# torch>=1.12.0+cu116
+# torchvision>=0.13.0+cu116
+
+# Note: Install instructions
+# 1. Basic CPU installation:
+#    pip install -r requirements.txt
+#
+# 2. For GPU support, install PyTorch with CUDA first:
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#    pip install -r requirements.txt
