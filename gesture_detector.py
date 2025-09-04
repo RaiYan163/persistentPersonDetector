@@ -18,7 +18,7 @@ except Exception:
 class GestureDetector:
     """
     Handles hand gesture recognition using MediaPipe.
-    Detects thumbs-up (for locking) and victory (for unlocking) gestures.
+    Detects pointing_up (for locking) and victory (for unlocking) gestures.
     """
     
     def __init__(self, model_path: str = config.GESTURE_PATH, 
@@ -44,6 +44,8 @@ class GestureDetector:
         self.recognizer = vision.GestureRecognizer.create_from_options(options)
         self.min_score = min_score
         print(f"[GESTURE] Loaded MediaPipe gesture recognizer")
+        print(f"[GESTURE] Lock gesture: POINTING UP (replaces thumbs up)")
+        print(f"[GESTURE] Unlock gesture: VICTORY")
     
     def detect_gestures(self, frame_bgr: np.ndarray, timestamp_ms: int) -> Dict:
         """
@@ -55,7 +57,7 @@ class GestureDetector:
             
         Returns:
             Dictionary containing:
-            - thumbs_up_list: List of thumbs-up detections
+            - pointing_up_list: List of pointing up detections
             - victory_list: List of victory gesture detections  
             - all_hands_data: List of all hand data for visualization
         """
@@ -68,13 +70,13 @@ class GestureDetector:
         # Recognize gestures
         result = self.recognizer.recognize_for_video(mp_image, timestamp_ms)
         
-        thumbs_up_list = []
+        pointing_up_list = []
         victory_list = []
         all_hands_data = []
         
         if not result or not result.hand_landmarks:
             return {
-                'thumbs_up_list': thumbs_up_list,
+                'pointing_up_list': pointing_up_list,
                 'victory_list': victory_list,
                 'all_hands_data': all_hands_data
             }
@@ -98,8 +100,8 @@ class GestureDetector:
             # Check for specific gestures
             wrist_x, wrist_y = landmarks[0]  # Wrist is landmark 0
             
-            if hand_data['is_thumbs_up'] and hand_data['score'] >= self.min_score:
-                thumbs_up_list.append({
+            if hand_data['is_pointing_up'] and hand_data['score'] >= self.min_score:
+                pointing_up_list.append({
                     'x': wrist_x,
                     'y': wrist_y,
                     'score': hand_data['score'],
@@ -115,7 +117,7 @@ class GestureDetector:
                 })
         
         return {
-            'thumbs_up_list': thumbs_up_list,
+            'pointing_up_list': pointing_up_list,
             'victory_list': victory_list,
             'all_hands_data': all_hands_data
         }
@@ -132,7 +134,7 @@ class GestureDetector:
             'landmarks': landmarks,
             'gesture': 'None',
             'score': 0.0,
-            'is_thumbs_up': False,
+            'is_pointing_up': False,
             'is_victory': False
         }
         
@@ -143,33 +145,33 @@ class GestureDetector:
         if not gesture_categories:
             return gesture_data
         
-        # Check for thumbs up
-        is_thumbs_up, tu_score, tu_label = self._is_thumbs_up(gesture_categories)
+        # Check for pointing up
+        is_pointing_up, pu_score, pu_label = self._is_pointing_up(gesture_categories)
         
         # Check for victory gesture
         is_victory, vic_score, vic_label = self._is_victory(gesture_categories)
         
         # Prioritize between gestures if both detected
-        if is_thumbs_up and is_victory:
-            if tu_score >= vic_score:
+        if is_pointing_up and is_victory:
+            if pu_score >= vic_score:
                 gesture_data.update({
-                    'gesture': tu_label,
-                    'score': tu_score,
-                    'is_thumbs_up': True,
+                    'gesture': pu_label,
+                    'score': pu_score,
+                    'is_pointing_up': True,
                     'is_victory': False
                 })
             else:
                 gesture_data.update({
                     'gesture': vic_label,
                     'score': vic_score,
-                    'is_thumbs_up': False,
+                    'is_pointing_up': False,
                     'is_victory': True
                 })
-        elif is_thumbs_up:
+        elif is_pointing_up:
             gesture_data.update({
-                'gesture': tu_label,
-                'score': tu_score,
-                'is_thumbs_up': True
+                'gesture': pu_label,
+                'score': pu_score,
+                'is_pointing_up': True
             })
         elif is_victory:
             gesture_data.update({
@@ -188,15 +190,15 @@ class GestureDetector:
         return gesture_data
     
     @staticmethod
-    def _is_thumbs_up(gesture_categories) -> Tuple[bool, float, str]:
-        """Check if gesture is thumbs up"""
+    def _is_pointing_up(gesture_categories) -> Tuple[bool, float, str]:
+        """Check if gesture is pointing up"""
         if not gesture_categories:
             return False, 0.0, ""
         
         for cat in gesture_categories:
             name = (cat.category_name or "").lower().replace("-", "_").replace(" ", "_")
-            if ("thumb" in name and "up" in name) or name in ["thumbs_up", "thumb_up", "good"]:
-                return True, float(cat.score), cat.category_name or "Thumbs_Up"
+            if "pointing_up" in name or name in ["point_up", "pointing"]:
+                return True, float(cat.score), cat.category_name or "Pointing_Up"
         
         # Return best gesture for debugging
         best = max(gesture_categories, key=lambda c: c.score)
@@ -221,11 +223,11 @@ class GestureDetector:
         self.min_score = score
         print(f"[GESTURE] Updated min score to {score}")
     
-    def get_best_thumbs_up(self, thumbs_up_list: List[Dict]) -> Dict:
-        """Get the thumbs-up gesture with highest confidence"""
-        if not thumbs_up_list:
+    def get_best_pointing_up(self, pointing_up_list: List[Dict]) -> Dict:
+        """Get the pointing up gesture with highest confidence"""
+        if not pointing_up_list:
             return None
-        return max(thumbs_up_list, key=lambda d: d['score'])
+        return max(pointing_up_list, key=lambda d: d['score'])
     
     def get_best_victory(self, victory_list: List[Dict]) -> Dict:
         """Get the victory gesture with highest confidence"""

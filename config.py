@@ -20,9 +20,6 @@ DEFAULT_LOSS_TIMEOUT = 15.0  # Seconds before auto-unlock (CHANGED from 5.0 to 1
 HIGH_CONFIDENCE_THRESH = 0.75 # High confidence threshold for persistent ReID matching
 PERSISTENT_REID_LOCK_THRESH = 0.75   # Threshold for recognizing locked person
 PERSISTENT_REID_UPDATE_THRESH = 0.80 # Threshold for updating person profile
-MAX_LOW_MATCHES = 5          # Max consecutive low confidence matches Similarity threshold for person matching
-DEFAULT_LOSS_TIMEOUT = 15.0  # Seconds before auto-unlock (CHANGED from 5.0 to 15.0)
-HIGH_CONFIDENCE_THRESH = 0.5 # High confidence threshold for ReID
 MAX_LOW_MATCHES = 5          # Max consecutive low confidence matches
 EXCLUSIVE_MODE_SIM_THRESH = 0.65  # Higher threshold for exclusive mode matching
 

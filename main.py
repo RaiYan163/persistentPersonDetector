@@ -1,4 +1,4 @@
-# main.py - Main application entry point with exclusive mode and secure unlocking
+# main.py - Main application entry point with persistent ReID and direction control
 
 import argparse
 import time
@@ -8,6 +8,8 @@ from person_detector import PersonDetector
 from gesture_detector import GestureDetector
 from person_reid import PersonReID
 from target_tracker import TargetTracker
+from direction_controller import DirectionController
+from direction_gui import direction_gui
 from utils import (
     associate_gesture_to_person, 
     draw_hand_landmarks, 
@@ -19,7 +21,7 @@ from utils import (
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
-        description="Person Lock System - Lock onto a person with thumbs-up gesture (EXCLUSIVE MODE)"
+        description="Person Lock System - Lock onto a person with pointing up gesture (PERSISTENT ReID TRACKING + DIRECTION CONTROL)"
     )
     
     # Video source
@@ -58,24 +60,35 @@ def parse_arguments():
 
 class PersonLockSystem:
     """
-    Main application class with exclusive mode tracking.
-    When locked, only the target person is visible.
+    Main application class with persistent ReID tracking, pointing up gesture, and direction control.
+    When locked, only the target person is visible and direction control is active.
     """
     
     def __init__(self, args):
-        """Initialize the person lock system with exclusive mode"""
+        """Initialize the person lock system with persistent ReID, pointing up gesture, and direction control"""
         self.args = args
         self.setup_display()
         self.initialize_components()
         self.start_time = time.time()
         
-        print("[SYSTEM] Person Lock System initialized with EXCLUSIVE MODE")
-        print("[SYSTEM] When locked: Only target person visible, 15s auto-unlock")
+        # Initialize direction controller
+        self.direction_controller = DirectionController()
+        
+        # Start the direction GUI
+        direction_gui.start_gui()
+        
+        print("[SYSTEM] Person Lock System initialized with PERSISTENT ReID tracking")
+        print("[SYSTEM] Security: High-confidence persistent person identification")
+        print("[SYSTEM] Features: Survives occlusions, prevents false positives, 15s timeout")
+        print("[SYSTEM] Lock Gesture: POINTING UP (index finger pointing upward)")
+        print("[SYSTEM] Unlock Gesture: VICTORY (peace sign)")
+        print("[SYSTEM] DIRECTION CONTROL: Active when person is locked")
+        print("[SYSTEM] Direction Commands: Fist=Forward, Thumb=Backward, Palm=Pause, Elbow angle=Left/Right")
         print("[UI] Controls: 'r' = reset/unlock, 'q' = quit, 'f' = toggle fullscreen")
     
     def setup_display(self):
         """Setup OpenCV display window with proper aspect ratio"""
-        self.window_name = "Person Lock System - EXCLUSIVE MODE"
+        self.window_name = "Person Lock System - PERSISTENT ReID + DIRECTION CONTROL"
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         
         if self.args.fullscreen:
@@ -99,7 +112,7 @@ class PersonLockSystem:
         # Person re-identification
         self.reid_system = PersonReID(device=self.args.device)
         
-        # Target tracking with exclusive mode
+        # Target tracking with persistent ReID
         self.tracker = TargetTracker(
             reid_system=self.reid_system,
             similarity_threshold=self.args.sim,
@@ -131,6 +144,7 @@ class PersonLockSystem:
                 import traceback
                 traceback.print_exc()
         finally:
+            direction_gui.stop_gui()  # Stop GUI when application exits
             cv2.destroyAllWindows()
             print("[SYSTEM] Shutdown complete")
     
@@ -146,7 +160,7 @@ class PersonLockSystem:
     
     def process_frame(self, detection_result) -> bool:
         """
-        Process a single frame with exclusive mode filtering.
+        Process a single frame with persistent ReID filtering and direction control.
         
         Returns:
             bool: True to continue, False to exit
@@ -174,14 +188,21 @@ class PersonLockSystem:
         # Handle locking/unlocking logic with security checks
         self.handle_gesture_logic(frame, all_boxes_xyxy, all_track_ids, gesture_results)
         
-        # CRITICAL: Apply exclusive mode filtering
-        # This is the key fix - only target person remains visible after this point
-        filtered_boxes, filtered_ids = self.tracker.filter_detections_exclusive(
+        # CRITICAL: Apply PERSISTENT ReID filtering
+        # This creates persistent person identity that survives occlusions and prevents false locking
+        filtered_boxes, filtered_ids = self.tracker.filter_detections_persistent_reid(
             frame, all_boxes_xyxy, all_track_ids
         )
         
+        # Direction control for locked person
+        direction_result = None
+        if self.tracker.is_locked and filtered_boxes is not None and len(filtered_boxes) > 0:
+            # Analyze the locked person for direction control
+            locked_person_bbox = filtered_boxes[0]  # First (and only) person in filtered results
+            direction_result = self.direction_controller.analyze_locked_person(frame, locked_person_bbox)
+        
         # Draw everything using FILTERED detections
-        self.draw_frame(frame, filtered_boxes, filtered_ids, gesture_results)
+        self.draw_frame(frame, filtered_boxes, filtered_ids, gesture_results, direction_result)
         
         # Handle user input
         return self.handle_input()
@@ -192,26 +213,26 @@ class PersonLockSystem:
         Uses ALL detections for gesture association, then applies security.
         """
         if not self.tracker.is_locked:
-            # Try to lock with thumbs up
+            # Try to lock with pointing up
             self.try_lock_target(frame, all_boxes_xyxy, all_track_ids, gesture_results)
         else:
             # Try to unlock with victory gesture - SECURE VERSION
             self.try_unlock_target_secure(frame, all_boxes_xyxy, all_track_ids, gesture_results)
     
     def try_lock_target(self, frame, all_boxes_xyxy, all_track_ids, gesture_results):
-        """Try to lock onto a person showing thumbs up"""
-        thumbs_up_list = gesture_results['thumbs_up_list']
+        """Try to lock onto a person showing pointing up gesture"""
+        pointing_up_list = gesture_results['pointing_up_list']
         
-        if not thumbs_up_list or all_boxes_xyxy is None or len(all_boxes_xyxy) == 0:
+        if not pointing_up_list or all_boxes_xyxy is None or len(all_boxes_xyxy) == 0:
             return
         
-        # Get best thumbs up gesture
-        best_thumbs_up = self.gesture_detector.get_best_thumbs_up(thumbs_up_list)
-        if not best_thumbs_up:
+        # Get best pointing up gesture
+        best_pointing_up = self.gesture_detector.get_best_pointing_up(pointing_up_list)
+        if not best_pointing_up:
             return
         
         # Associate gesture to person using ALL detections
-        gesture_x, gesture_y = best_thumbs_up['x'], best_thumbs_up['y']
+        gesture_x, gesture_y = best_pointing_up['x'], best_pointing_up['y']
         person_idx = associate_gesture_to_person(
             gesture_x, gesture_y, all_boxes_xyxy, frame.shape[:2]
         )
@@ -223,8 +244,10 @@ class PersonLockSystem:
             
             self.tracker.lock_target(frame, target_box, target_id)
             
-            print(f"[SYSTEM] LOCKED onto person at index {person_idx}")
-            print(f"[SYSTEM] Entering EXCLUSIVE MODE - only this person will be visible")
+            print(f"[SYSTEM] PERSISTENT LOCK created for person with Track ID {target_id}")
+            print(f"[SYSTEM] ReID-based persistent identity - survives occlusions and ID changes")
+            print(f"[SYSTEM] High-confidence matching prevents false positive locking")
+            print(f"[SYSTEM] DIRECTION CONTROL now active for locked person")
             
             # Visual feedback
             cv2.circle(frame, (gesture_x, gesture_y), 25, config.GREEN, 4)
@@ -254,8 +277,15 @@ class PersonLockSystem:
         )
         
         if is_from_target:
-            print(f"[SYSTEM] Victory gesture from TARGET PERSON: {best_victory['score']:.2f}")
-            print(f"[SYSTEM] UNLOCKING and exiting EXCLUSIVE MODE")
+            state_info = self.tracker.get_state()
+            person_id = state_info.get('person_id', 'Unknown')
+            print(f"[SYSTEM] Victory gesture from {person_id}")
+            print(f"[SYSTEM] UNLOCKING persistent ReID profile")
+            print(f"[SYSTEM] DIRECTION CONTROL deactivated")
+            
+            # Reset direction controller state
+            self.direction_controller.reset_state()
+            
             self.tracker.unlock_target()
             
             # Visual feedback
@@ -266,22 +296,28 @@ class PersonLockSystem:
             print(f"[SECURITY] Victory gesture NOT from target person - IGNORING")
             print(f"[SECURITY] Only the locked person can unlock themselves")
     
-    def draw_frame(self, frame, filtered_boxes, filtered_ids, gesture_results):
+    def draw_frame(self, frame, filtered_boxes, filtered_ids, gesture_results, direction_result=None):
         """
         Draw all visual elements on the frame using FILTERED detections.
-        In exclusive mode, this will only show the target person.
+        In persistent ReID mode, this will only show the target person when locked.
         """
         # Draw detected persons (filtered - only target when locked)
         if filtered_boxes is not None:
             if self.tracker.is_locked:
-                # In exclusive mode, draw target with special styling
+                # In locked mode, draw target with special styling
                 draw_person_boxes(frame, filtered_boxes, filtered_ids, color=config.RED, thickness=4)
                 if len(filtered_boxes) > 0:
                     # Draw "LOCKED" label
                     box = filtered_boxes[0]
                     x1, y1 = int(box[0]), int(box[1])
-                    cv2.putText(frame, "TARGET (LOCKED)", (x1, max(0, y1 - 10)), 
+                    cv2.putText(frame, "TARGET (LOCKED) - DIRECTION CONTROL ACTIVE", (x1, max(0, y1 - 10)), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, config.RED, 3)
+                    
+                    # Draw direction control overlay
+                    if direction_result:
+                        crop_region = direction_result.get('crop_region')
+                        if crop_region:
+                            self.direction_controller.draw_direction_overlay(frame, direction_result, crop_region)
             else:
                 # Normal mode - draw all people
                 draw_person_boxes(frame, filtered_boxes, filtered_ids)
@@ -289,8 +325,8 @@ class PersonLockSystem:
         # Draw hands and gestures
         self.draw_gestures(frame, gesture_results)
         
-        # Draw HUD with exclusive mode info
-        self.draw_exclusive_hud(frame)
+        # Draw HUD with persistent ReID and direction info
+        self.draw_persistent_hud(frame)
         
         # Show frame
         cv2.imshow(self.window_name, frame)
@@ -314,8 +350,8 @@ class PersonLockSystem:
                     color = config.GRAY
                     thickness = 1
             else:
-                # When unlocked, highlight thumbs up
-                if hand_data['is_thumbs_up']:
+                # When unlocked, highlight pointing up
+                if hand_data['is_pointing_up']:
                     color = config.GREEN
                     thickness = 3
                 elif hand_data['is_victory']:
@@ -335,26 +371,21 @@ class PersonLockSystem:
                 cv2.putText(frame, gesture_text, (wrist_x + 10, wrist_y - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
-    def draw_exclusive_hud(self, frame):
-        """Draw HUD with exclusive mode information"""
+    def draw_persistent_hud(self, frame):
+        """Draw HUD with persistent ReID tracking and direction control information"""
         H = frame.shape[0]
         
         if self.tracker.is_locked:
-            # Locked mode - show exclusive info
-            state_info = self.tracker.get_state()
-            time_since_seen = state_info['time_since_last_seen']
-            
-            cv2.putText(frame, "EXCLUSIVE MODE - TARGET LOCKED", (20, H - 110),
+            # Locked mode - minimal info
+            cv2.putText(frame, "LOCKED", (20, H - 80),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, config.RED, 3)
-            cv2.putText(frame, f"Auto-unlock in: {max(0, 15.0 - time_since_seen):.1f}s", (20, H - 80),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, config.YELLOW, 2)
-            cv2.putText(frame, "Only YOU can unlock with VICTORY sign", (20, H - 50),
+            cv2.putText(frame, "VICTORY to unlock", (20, H - 50),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         else:
-            # Unlocked mode
-            cv2.putText(frame, "ALL PEOPLE VISIBLE", (20, H - 110),
+            # Unlocked mode - minimal info
+            cv2.putText(frame, "READY FOR LOCK", (20, H - 80),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, config.GREEN, 3)
-            cv2.putText(frame, "Show THUMBS UP near your body to lock onto yourself", (20, H - 80),
+            cv2.putText(frame, "POINTING UP to lock", (20, H - 50),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         
         cv2.putText(frame, "r: reset | q: quit | f: fullscreen", (20, H - 20),
@@ -374,6 +405,10 @@ class PersonLockSystem:
         elif key == ord('r'):
             if self.tracker.is_locked:
                 print("[UI] Manual unlock - removing persistent ReID profile")
+                print("[UI] Direction control deactivated")
+                # Reset direction controller and GUI
+                self.direction_controller.reset_state()
+                direction_gui.set_lock_status(False)
             self.tracker.unlock_target()
         elif key == ord('f'):
             self.toggle_fullscreen()
