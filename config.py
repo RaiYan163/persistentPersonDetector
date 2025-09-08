@@ -22,10 +22,16 @@ LOCKING_MODE = "FIST_PALM"  # <-- CODER CHANGES THIS LINE TO SWITCH
 # ==============================================================================
 
 # Fist + Palm proximity-based locking settings (only used if LOCKING_MODE = "FIST_PALM")
-FIST_PALM_MIN_CONFIDENCE = 0.45        # Minimum confidence for each gesture
-FIST_PALM_MAX_DISTANCE_PIXELS = 400      # Max pixels between hand centers
-FIST_PALM_MAX_DISTANCE_RATIO = 0.30      # Max distance as ratio of frame diagonal
+FIST_PALM_MIN_CONFIDENCE = 0.50        # Minimum confidence for each gesture
+FIST_PALM_MAX_DISTANCE_PIXELS = 250      # Max pixels between hand centers
+FIST_PALM_MAX_DISTANCE_RATIO = 0.20      # Max distance as ratio of frame diagonal
 FIST_PALM_REQUIRED_HANDS = 2             # Must detect exactly 2 hands
+
+# Dual Victory proximity-based unlocking settings
+DUAL_VICTORY_MIN_CONFIDENCE = 0.50      # Minimum confidence for each victory gesture
+DUAL_VICTORY_MAX_DISTANCE_PIXELS = 300  # Max pixels between hand centers
+DUAL_VICTORY_MAX_DISTANCE_RATIO = 0.30  # Max distance as ratio of frame diagonal
+DUAL_VICTORY_REQUIRED_HANDS = 2         # Must detect exactly 2 hands
 
 # ReID settings for persistent tracking
 DEFAULT_SIM_THRESH = 0.30    # Base similarity threshold (not used directly)

@@ -154,8 +154,8 @@ python main.py --fullscreen
 
 ### 4. Direction Control (When Locked)
 - **Forward/Backward**: Hand gestures
-  - Closed Fist = Forward
-  - Thumb Up = Backward
+  - Thumb Up = Forward
+  - Thumb Down = Backward
   - Open Palm = Pause
 - **Left/Right**: Right elbow angle
   - < 90° = Left turn

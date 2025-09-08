@@ -80,6 +80,18 @@ def is_open_palm(gesture_categories):
     
     return False, 0.0
 
+def is_victory_gesture(gesture_categories):
+    """Check if gesture is victory/peace sign."""
+    if not gesture_categories:
+        return False, 0.0
+    
+    for cat in gesture_categories:
+        name = (cat.category_name or "").lower().replace("-", "_").replace(" ", "_")
+        if name in ["victory", "peace"]:
+            return True, float(cat.score)
+    
+    return False, 0.0
+
 class GestureDetector:
     """
     Handles hand gesture recognition using MediaPipe.
@@ -183,11 +195,15 @@ class GestureDetector:
         
         # Add fist+palm detection
         fist_palm_result = self.detect_fist_palm_combination(all_hands_data, (H, W))
+        
+        # Add dual victory detection
+        dual_victory_result = self.detect_dual_victory_combination(all_hands_data, (H, W))
 
         return {
             'pointing_up_list': pointing_up_list,
             'victory_list': victory_list,
-            'fist_palm_combination': fist_palm_result,  # NEW
+            'fist_palm_combination': fist_palm_result,
+            'dual_victory_combination': dual_victory_result,  # NEW
             'all_hands_data': all_hands_data
         }
     
@@ -352,6 +368,88 @@ class GestureDetector:
         elif fist_hand_idx is not None and palm_hand_idx is not None:
             print(f"[FIST+PALM] Gestures OK but TOO FAR: Distance={pixel_distance:.0f}px "
                   f"(max={config.FIST_PALM_MAX_DISTANCE_PIXELS}px)")
+        
+        return result
+    
+    def detect_dual_victory_combination(self, all_hands_data, frame_shape):
+        """
+        Detect dual victory gesture combination with proximity validation.
+        Both hands must show victory gestures and be close together.
+        Returns detection result with midpoint for person association.
+        """
+        # Initialize result structure
+        result = {
+            'detected': False,
+            'victory1_hand_idx': None,
+            'victory2_hand_idx': None,
+            'midpoint': (None, None),
+            'distance_pixels': float('inf'),
+            'distance_ratio': float('inf'),
+            'victory1_confidence': 0.0,
+            'victory2_confidence': 0.0,
+            'close_enough': False
+        }
+        
+        # Must have exactly 2 hands
+        if len(all_hands_data) != config.DUAL_VICTORY_REQUIRED_HANDS:
+            return result
+        
+        hand1 = all_hands_data[0]
+        hand2 = all_hands_data[1]
+        
+        # Check if both hands show victory gestures using the proper method
+        hand1_is_victory = hand1.get('is_victory', False)
+        hand2_is_victory = hand2.get('is_victory', False)
+        hand1_victory_score = hand1.get('score', 0.0) if hand1_is_victory else 0.0
+        hand2_victory_score = hand2.get('score', 0.0) if hand2_is_victory else 0.0
+        
+        # Both hands must be victory gestures
+        if not (hand1_is_victory and hand2_is_victory):
+            # Debug output to understand what gestures are detected
+            print(f"[DUAL_VICTORY] Hand1: {hand1.get('gesture', 'Unknown')} (is_victory: {hand1_is_victory})")
+            print(f"[DUAL_VICTORY] Hand2: {hand2.get('gesture', 'Unknown')} (is_victory: {hand2_is_victory})")
+            return result
+        
+        # Check confidence thresholds
+        if (hand1_victory_score < config.DUAL_VICTORY_MIN_CONFIDENCE or 
+            hand2_victory_score < config.DUAL_VICTORY_MIN_CONFIDENCE):
+            return result
+        
+        # Calculate distance between hands
+        hand1_landmarks = hand1['landmarks']
+        hand2_landmarks = hand2['landmarks']
+        
+        pixel_distance, distance_ratio = calculate_hand_centers_distance(
+            hand1_landmarks, hand2_landmarks, frame_shape
+        )
+        
+        # Check if hands are close enough
+        close_enough = (pixel_distance <= config.DUAL_VICTORY_MAX_DISTANCE_PIXELS or 
+                       distance_ratio <= config.DUAL_VICTORY_MAX_DISTANCE_RATIO)
+        
+        # Calculate midpoint for person association
+        midpoint_x, midpoint_y = calculate_hand_midpoint(hand1_landmarks, hand2_landmarks)
+        
+        # Update result
+        result.update({
+            'detected': close_enough,  # Only true if close enough
+            'victory1_hand_idx': 0,
+            'victory2_hand_idx': 1,
+            'midpoint': (midpoint_x, midpoint_y),
+            'distance_pixels': pixel_distance,
+            'distance_ratio': distance_ratio,
+            'victory1_confidence': hand1_victory_score,
+            'victory2_confidence': hand2_victory_score,
+            'close_enough': close_enough
+        })
+        
+        # Debug information
+        if result['detected']:
+            print(f"[DUAL_VICTORY] DETECTED: Victory1 confidence={hand1_victory_score:.2f}, "
+                  f"Victory2 confidence={hand2_victory_score:.2f}, Distance={pixel_distance:.0f}px")
+        elif hand1_is_victory and hand2_is_victory:
+            print(f"[DUAL_VICTORY] Both victory gestures OK but TOO FAR: Distance={pixel_distance:.0f}px "
+                  f"(max={config.DUAL_VICTORY_MAX_DISTANCE_PIXELS}px)")
         
         return result
     

@@ -12,7 +12,8 @@ from direction_controller import DirectionController
 from direction_gui import direction_gui
 from utils import (
     associate_gesture_to_person,
-    associate_fist_palm_to_person, 
+    associate_fist_palm_to_person,
+    associate_dual_victory_to_person,
     draw_hand_landmarks, 
     draw_person_boxes,
     draw_locked_target, 
@@ -93,7 +94,7 @@ class PersonLockSystem:
         
         print("[SYSTEM] Unlock Gesture: VICTORY (peace sign)")
         print("[SYSTEM] DIRECTION CONTROL: Active when person is locked")
-        print("[SYSTEM] Direction Commands: Fist=Forward, Thumb=Backward, Palm=Pause, Elbow angle=Left/Right")
+        print("[SYSTEM] Direction Commands: Thumb_Up=Forward, Thumb_Down=Backward, Palm=Pause, Elbow angle=Left/Right")
         print("[UI] Controls: 'r' = reset/unlock, 'q' = quit, 'f' = toggle fullscreen")
     
     def setup_display(self):
@@ -328,44 +329,81 @@ class PersonLockSystem:
     
     def try_unlock_target_secure(self, frame, all_boxes_xyxy, all_track_ids, gesture_results):
         """
-        SECURE VERSION: Try to unlock with victory gesture.
-        Only unlocks if victory gesture comes from the locked person.
-        This is the critical security fix.
+        SECURE VERSION: Try to unlock with dual victory gesture combination.
+        Only unlocks if both victory gestures come from the locked person and are close together.
+        This provides enhanced security through dual gesture requirement.
         """
+        # ONLY use dual victory gesture (enhanced security - no fallback)
+        dual_victory_result = gesture_results.get('dual_victory_combination', {})
+        
+        if dual_victory_result.get('detected', False):
+            self._try_unlock_with_dual_victory(frame, all_boxes_xyxy, all_track_ids, dual_victory_result, gesture_results)
+            return
+        
+        # No single victory fallback - only dual victory unlocking allowed
+        # This ensures users must use both hands with victory gestures close together
+        
+        # Optional: Show debug message when single victory is detected but ignored
         victory_list = gesture_results['victory_list']
-        
-        if not victory_list:
+        if victory_list:
+            print(f"[SECURITY] Single victory gesture detected but IGNORED - Dual victory required for unlocking")
+    
+    def _try_unlock_with_dual_victory(self, frame, all_boxes_xyxy, all_track_ids, dual_victory_result, gesture_results):
+        """Try to unlock using dual victory gesture combination"""
+        # Get midpoint for person association
+        midpoint_x, midpoint_y = dual_victory_result['midpoint']
+        if midpoint_x is None or midpoint_y is None:
             return
         
-        best_victory = self.gesture_detector.get_best_victory(victory_list)
-        if not best_victory:
+        # Get hand landmarks for association
+        all_hands_data = gesture_results.get('all_hands_data', [])
+        if len(all_hands_data) < 2:
             return
         
-        gesture_x, gesture_y = best_victory['x'], best_victory['y']
+        hand1_landmarks = all_hands_data[0]['landmarks']
+        hand2_landmarks = all_hands_data[1]['landmarks']
         
-        # SECURITY CHECK: Verify victory gesture comes from locked target person
+        # Associate gesture combination to person
+        person_idx = associate_dual_victory_to_person(
+            midpoint_x, midpoint_y, hand1_landmarks, hand2_landmarks, 
+            all_boxes_xyxy, frame.shape[:2]
+        )
+        
+        if person_idx is None:
+            print(f"[SECURITY] Dual victory gesture not associated with any person")
+            return
+        
+        # SECURITY CHECK: Verify dual victory gesture comes from locked target person
+        # We use the midpoint location for this check
         is_from_target = self.tracker.is_target_person_at_location(
-            frame, gesture_x, gesture_y, all_boxes_xyxy, all_track_ids
+            frame, midpoint_x, midpoint_y, all_boxes_xyxy, all_track_ids
         )
         
         if is_from_target:
             state_info = self.tracker.get_state()
             person_id = state_info.get('person_id', 'Unknown')
-            print(f"[SYSTEM] Victory gesture from {person_id}")
+            print(f"[SYSTEM] Dual victory gesture from {person_id}")
             print(f"[SYSTEM] UNLOCKING persistent ReID profile")
             print(f"[SYSTEM] DIRECTION CONTROL deactivated")
+            print(f"[SYSTEM] Unlock Method: DUAL VICTORY (enhanced security)")
             
             # Reset direction controller state
             self.direction_controller.reset_state()
             
             self.tracker.unlock_target()
             
-            # Visual feedback
-            cv2.circle(frame, (gesture_x, gesture_y), 25, config.BLUE, 4)
-            cv2.putText(frame, "UNLOCKED!", (gesture_x + 30, gesture_y), 
+            # Visual feedback for dual victory unlock
+            cv2.circle(frame, (midpoint_x, midpoint_y), 25, config.BLUE, 4)
+            cv2.putText(frame, "UNLOCKED!", (midpoint_x + 30, midpoint_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, config.BLUE, 3)
+            
+            # Draw line between hands to show combination
+            if len(all_hands_data) >= 2 and hand1_landmarks and hand2_landmarks:
+                hand1_center = hand1_landmarks[0]
+                hand2_center = hand2_landmarks[0]
+                cv2.line(frame, hand1_center, hand2_center, config.BLUE, 3)
         else:
-            print(f"[SECURITY] Victory gesture NOT from target person - IGNORING")
+            print(f"[SECURITY] Dual victory gesture NOT from target person - IGNORING")
             print(f"[SECURITY] Only the locked person can unlock themselves")
     
     def draw_frame(self, frame, filtered_boxes, filtered_ids, gesture_results, direction_result=None):
@@ -412,6 +450,13 @@ class PersonLockSystem:
             fist_palm_result = gesture_results.get('fist_palm_combination', {})
             if fist_palm_result.get('detected', False):
                 self.draw_fist_palm_combination(frame, gesture_results, fist_palm_result)
+                return  # Skip individual hand drawing when showing combination
+        
+        # Handle dual victory combination display (when locked)
+        if self.tracker.is_locked:
+            dual_victory_result = gesture_results.get('dual_victory_combination', {})
+            if dual_victory_result.get('detected', False):
+                self.draw_dual_victory_combination(frame, gesture_results, dual_victory_result)
                 return  # Skip individual hand drawing when showing combination
         
         for hand_data in all_hands:
@@ -502,6 +547,58 @@ class PersonLockSystem:
             cv2.putText(frame, status_text, (midpoint_x - 50, midpoint_y + 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
     
+    def draw_dual_victory_combination(self, frame, gesture_results, dual_victory_result):
+        """Draw special visualization for dual victory gesture combination"""
+        all_hands_data = gesture_results.get('all_hands_data', [])
+        
+        if len(all_hands_data) < 2:
+            return
+        
+        victory1_hand_idx = dual_victory_result.get('victory1_hand_idx')
+        victory2_hand_idx = dual_victory_result.get('victory2_hand_idx')
+        
+        if victory1_hand_idx is None or victory2_hand_idx is None:
+            return
+        
+        victory1_hand = all_hands_data[victory1_hand_idx]
+        victory2_hand = all_hands_data[victory2_hand_idx]
+        
+        # Draw victory hand 1 in blue
+        if victory1_hand['landmarks']:
+            draw_hand_landmarks(frame, victory1_hand['landmarks'], config.BLUE, 3)
+            wrist_pos = victory1_hand['landmarks'][0]
+            cv2.putText(frame, "VICTORY", (wrist_pos[0] + 15, wrist_pos[1] - 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.BLUE, 2)
+        
+        # Draw victory hand 2 in cyan
+        if victory2_hand['landmarks']:
+            draw_hand_landmarks(frame, victory2_hand['landmarks'], config.CYAN, 3)
+            wrist_pos = victory2_hand['landmarks'][0]
+            cv2.putText(frame, "VICTORY", (wrist_pos[0] + 15, wrist_pos[1] - 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.CYAN, 2)
+        
+        # Draw connection line between hands
+        if victory1_hand['landmarks'] and victory2_hand['landmarks']:
+            victory1_center = victory1_hand['landmarks'][0]
+            victory2_center = victory2_hand['landmarks'][0]
+            cv2.line(frame, victory1_center, victory2_center, config.BLUE, 2)
+        
+        # Draw midpoint
+        midpoint_x, midpoint_y = dual_victory_result['midpoint']
+        if midpoint_x is not None and midpoint_y is not None:
+            cv2.circle(frame, (midpoint_x, midpoint_y), 8, config.BLUE, -1)
+        
+        # Draw distance information
+        distance_pixels = dual_victory_result.get('distance_pixels', 0)
+        close_enough = dual_victory_result.get('close_enough', False)
+        
+        status_color = config.BLUE if close_enough else config.RED
+        status_text = f"Dual Victory: {distance_pixels:.0f}px {'READY TO UNLOCK' if close_enough else 'TOO FAR'}"
+        
+        if midpoint_x is not None and midpoint_y is not None:
+            cv2.putText(frame, status_text, (midpoint_x - 80, midpoint_y + 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
+    
     def draw_persistent_hud(self, frame):
         """Draw HUD with persistent ReID tracking and direction control information"""
         H = frame.shape[0]
@@ -510,7 +607,7 @@ class PersonLockSystem:
             # Locked mode - minimal info
             cv2.putText(frame, "LOCKED", (20, H - 80),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, config.RED, 3)
-            cv2.putText(frame, "VICTORY to unlock", (20, H - 50),
+            cv2.putText(frame, "DUAL VICTORY (close together) to unlock", (20, H - 50),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         else:
             # Unlocked mode - show instructions based on mode

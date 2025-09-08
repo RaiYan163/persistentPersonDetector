@@ -27,8 +27,8 @@ GESTURE_PATH = "gesture_recognizer.task"
 
 # Direction control configuration
 GESTURE_TO_FB = {
-    "Closed_Fist": "Forward",
-    "Thumb_Up": "Backward", 
+    "Thumb_Up": "Forward",
+    "Thumb_Down": "Backward", 
     "Open_Palm": "Pause",
 }
 
@@ -85,7 +85,7 @@ class DirectionController:
         self.start_time = time.perf_counter()
         
         print("[DIRECTION] Direction controller initialized")
-        print("[DIRECTION] Forward/Backward: Closed_Fist/Thumb_Up/Open_Palm")
+        print("[DIRECTION] Forward/Backward: Thumb_Up/Thumb_Down/Open_Palm")
         print("[DIRECTION] Left/Right: Right elbow angle (< 90° = Left, > 90° = Right)")
     
     def initialize_models(self):
