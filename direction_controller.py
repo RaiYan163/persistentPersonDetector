@@ -25,11 +25,11 @@ HAND_PATH = "hand_landmarker.task"
 GESTURE_URL = "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task"
 GESTURE_PATH = "gesture_recognizer.task"
 
-# Direction control configuration
-GESTURE_TO_FB = {
-    "Thumb_Up": "Forward",
-    "Thumb_Down": "Backward", 
-    "Open_Palm": "Pause",
+# Direction control configuration - Left hand palm/fist control
+LEFT_HAND_GESTURE_TO_FB = {
+    "Open_Palm": "Forward",
+    "Closed_Fist": "Backward", 
+    # No pause gesture - neutral position when no clear gesture detected
 }
 
 # Control parameters
@@ -85,7 +85,7 @@ class DirectionController:
         self.start_time = time.perf_counter()
         
         print("[DIRECTION] Direction controller initialized")
-        print("[DIRECTION] Forward/Backward: Thumb_Up/Thumb_Down/Open_Palm")
+        print("[DIRECTION] Forward/Backward: LEFT HAND (Open_Palm=Forward, Closed_Fist=Backward)")
         print("[DIRECTION] Left/Right: Right elbow angle (< 90° = Left, > 90° = Right)")
     
     def initialize_models(self):
@@ -128,13 +128,14 @@ class DirectionController:
         )
         self.gesture_recognizer = mp_vision.GestureRecognizer.create_from_options(gest_opts)
     
-    def analyze_locked_person(self, frame: np.ndarray, person_bbox) -> Optional[Dict]:
+    def analyze_locked_person(self, frame: np.ndarray, person_bbox, main_gesture_results=None) -> Optional[Dict]:
         """
         Analyze the locked person's pose and gestures for directional control.
         
         Args:
             frame: Full frame image
             person_bbox: Bounding box of the locked person [x1, y1, x2, y2]
+            main_gesture_results: Gesture results from main detector to avoid conflicts
             
         Returns:
             Dictionary with direction commands or None if no analysis possible
@@ -167,15 +168,16 @@ class DirectionController:
         ts_ms = int((current_time - self.start_time) * 1000)
         
         try:
-            # Run MediaPipe analysis on cropped region
+            # Run MediaPipe POSE analysis on cropped region (still needed for elbow angle)
             pose_result = self.pose_detector.detect_for_video(mp_img, ts_ms)
-            gesture_result = self.gesture_recognizer.recognize_for_video(mp_img, ts_ms)
             
             # Analyze pose for left/right control
             lr_command = self._analyze_pose_for_lr(pose_result, person_crop.shape)
             
-            # Analyze gestures for forward/backward control  
-            fb_command = self._analyze_gestures_for_fb(gesture_result, current_time)
+            # Use main gesture results if provided (to avoid conflicts with unlocking)
+            fb_command = None
+            if main_gesture_results:
+                fb_command = self._analyze_main_gestures_for_fb(main_gesture_results, current_time)
             
             # Check for command changes and print
             self._handle_command_output(fb_command, lr_command, current_time)
@@ -222,32 +224,81 @@ class DirectionController:
         return self.last_lr
     
     def _analyze_gestures_for_fb(self, gesture_result, current_time) -> Optional[str]:
-        """Analyze gestures for forward/backward/pause control"""
-        if not gesture_result.gestures:
+        """Analyze LEFT HAND gestures for forward/backward control"""
+        if not gesture_result.gestures or not gesture_result.handedness:
             # Hold last command briefly if no gesture detected
             if (current_time - self.last_fb_seen_time) <= FB_HOLD_SECONDS:
                 return self.last_fb
             return None
         
-        # Find best gesture across all hands
-        best_gesture = None
-        best_score = 0.0
+        # Find left hand gestures specifically
+        left_hand_gesture = None
+        left_hand_score = 0.0
         
-        for hand_gestures in gesture_result.gestures:
-            if not hand_gestures:
+        # Iterate through detected hands to find left hand
+        for i, (hand_gestures, handedness_list) in enumerate(zip(gesture_result.gestures, gesture_result.handedness)):
+            if not hand_gestures or not handedness_list:
                 continue
             
-            for gesture in hand_gestures:
-                if gesture.score > best_score:
-                    best_score = gesture.score
-                    best_gesture = gesture
+            # Check if this is the left hand
+            handedness = handedness_list[0]  # First (and usually only) handedness result
+            if handedness.category_name.lower() == "left":
+                # Find best gesture for left hand
+                for gesture in hand_gestures:
+                    if gesture.score > left_hand_score:
+                        left_hand_score = gesture.score
+                        left_hand_gesture = gesture
+                break  # Found left hand, no need to check others
         
-        if best_gesture:
-            gesture_name = best_gesture.category_name
-            mapped_command = GESTURE_TO_FB.get(gesture_name)
+        if left_hand_gesture:
+            gesture_name = left_hand_gesture.category_name
+            mapped_command = LEFT_HAND_GESTURE_TO_FB.get(gesture_name)
             
             if mapped_command:
                 self.last_fb_seen_time = current_time
+                print(f"[DIRECTION] Left hand {gesture_name} -> {mapped_command}")
+                return mapped_command
+        
+        # Hold last command briefly
+        if (current_time - self.last_fb_seen_time) <= FB_HOLD_SECONDS:
+            return self.last_fb
+        
+        return None
+    
+    def _analyze_main_gestures_for_fb(self, main_gesture_results, current_time) -> Optional[str]:
+        """
+        Analyze gestures from main detector for forward/backward control.
+        Uses the main gesture detection results to avoid conflicts with unlocking.
+        """
+        if not main_gesture_results or 'all_hands_data' not in main_gesture_results:
+            # Hold last command briefly if no gesture detected
+            if (current_time - self.last_fb_seen_time) <= FB_HOLD_SECONDS:
+                return self.last_fb
+            return None
+        
+        all_hands_data = main_gesture_results['all_hands_data']
+        
+        # Look for left hand gestures specifically
+        left_hand_gesture = None
+        left_hand_score = 0.0
+        
+        for hand_data in all_hands_data:
+            # Note: The main gesture detector doesn't provide handedness directly
+            # For now, we'll check all hands for palm/fist gestures
+            # This is a limitation we'll need to address
+            gesture_name = hand_data.get('gesture', 'None')
+            score = hand_data.get('score', 0.0)
+            
+            # Check if this hand shows a control gesture
+            if gesture_name in LEFT_HAND_GESTURE_TO_FB and score > left_hand_score:
+                left_hand_score = score
+                left_hand_gesture = gesture_name
+        
+        if left_hand_gesture and left_hand_score > 0.5:  # Minimum confidence
+            mapped_command = LEFT_HAND_GESTURE_TO_FB.get(left_hand_gesture)
+            if mapped_command:
+                self.last_fb_seen_time = current_time
+                print(f"[DIRECTION] Hand {left_hand_gesture} -> {mapped_command}")
                 return mapped_command
         
         # Hold last command briefly

@@ -33,6 +33,10 @@ DUAL_VICTORY_MAX_DISTANCE_PIXELS = 300  # Max pixels between hand centers
 DUAL_VICTORY_MAX_DISTANCE_RATIO = 0.30  # Max distance as ratio of frame diagonal
 DUAL_VICTORY_REQUIRED_HANDS = 2         # Must detect exactly 2 hands
 
+# Gesture hold timing settings
+GESTURE_HOLD_DURATION = 2.0             # Seconds to hold gesture for locking/unlocking
+COUNTDOWN_UPDATE_INTERVAL = 0.1         # How often to update countdown (100ms)
+
 # ReID settings for persistent tracking
 DEFAULT_SIM_THRESH = 0.30    # Base similarity threshold (not used directly)
 DEFAULT_LOSS_TIMEOUT = 15.0  # Seconds before auto-unlock (CHANGED from 5.0 to 15.0)

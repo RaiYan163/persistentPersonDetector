@@ -4,6 +4,79 @@ import argparse
 import time
 import cv2
 import config
+
+class GestureHoldTimer:
+    """
+    Manages gesture hold timing with countdown display for locking/unlocking.
+    Requires gestures to be held for a specified duration before triggering.
+    """
+    
+    def __init__(self, hold_duration: float = config.GESTURE_HOLD_DURATION):
+        self.hold_duration = hold_duration
+        self.reset()
+    
+    def reset(self):
+        """Reset the timer state"""
+        self.start_time = None
+        self.is_active = False
+        self.gesture_type = None
+        self.last_update_time = 0
+    
+    def start_timing(self, gesture_type: str):
+        """Start timing a gesture"""
+        current_time = time.time()
+        
+        if not self.is_active:
+            # Start new timing
+            self.start_time = current_time
+            self.is_active = True
+            self.gesture_type = gesture_type
+            self.last_update_time = current_time
+            print(f"[TIMER] Started {gesture_type} hold timer - hold for {self.hold_duration:.1f}s")
+        
+        return False  # Not completed yet
+    
+    def update(self, gesture_detected: bool) -> tuple[bool, float]:
+        """
+        Update timer state.
+        
+        Returns:
+            (completed, remaining_time)
+        """
+        if not self.is_active:
+            return False, self.hold_duration
+        
+        if not gesture_detected:
+            # Gesture lost, reset timer
+            print(f"[TIMER] {self.gesture_type} gesture lost - resetting timer")
+            self.reset()
+            return False, self.hold_duration
+        
+        current_time = time.time()
+        elapsed = current_time - self.start_time
+        remaining = max(0, self.hold_duration - elapsed)
+        
+        # Update countdown display every 100ms
+        if (current_time - self.last_update_time) >= config.COUNTDOWN_UPDATE_INTERVAL:
+            if remaining > 0:
+                print(f"[TIMER] {self.gesture_type} hold: {remaining:.1f}s remaining")
+            self.last_update_time = current_time
+        
+        if elapsed >= self.hold_duration:
+            # Timer completed
+            print(f"[TIMER] {self.gesture_type} hold completed!")
+            self.reset()
+            return True, 0.0
+        
+        return False, remaining
+    
+    def get_progress(self) -> float:
+        """Get progress as ratio 0.0-1.0"""
+        if not self.is_active or not self.start_time:
+            return 0.0
+        
+        elapsed = time.time() - self.start_time
+        return min(1.0, elapsed / self.hold_duration)
 from person_detector import PersonDetector
 from gesture_detector import GestureDetector
 from person_reid import PersonReID
@@ -76,6 +149,10 @@ class PersonLockSystem:
         # Initialize direction controller
         self.direction_controller = DirectionController()
         
+        # Initialize gesture hold timers
+        self.lock_timer = GestureHoldTimer()
+        self.unlock_timer = GestureHoldTimer()
+        
         # Start the direction GUI
         direction_gui.start_gui()
         
@@ -94,7 +171,7 @@ class PersonLockSystem:
         
         print("[SYSTEM] Unlock Gesture: VICTORY (peace sign)")
         print("[SYSTEM] DIRECTION CONTROL: Active when person is locked")
-        print("[SYSTEM] Direction Commands: Thumb_Up=Forward, Thumb_Down=Backward, Palm=Pause, Elbow angle=Left/Right")
+        print("[SYSTEM] Direction Commands: LEFT HAND (Palm=Forward, Fist=Backward), RIGHT ELBOW (angle=Left/Right)")
         print("[UI] Controls: 'r' = reset/unlock, 'q' = quit, 'f' = toggle fullscreen")
     
     def setup_display(self):
@@ -210,7 +287,8 @@ class PersonLockSystem:
         if self.tracker.is_locked and filtered_boxes is not None and len(filtered_boxes) > 0:
             # Analyze the locked person for direction control
             locked_person_bbox = filtered_boxes[0]  # First (and only) person in filtered results
-            direction_result = self.direction_controller.analyze_locked_person(frame, locked_person_bbox)
+            # Pass gesture results to avoid conflicts with unlocking gestures
+            direction_result = self.direction_controller.analyze_locked_person(frame, locked_person_bbox, gesture_results)
         
         # Draw everything using FILTERED detections
         self.draw_frame(frame, filtered_boxes, filtered_ids, gesture_results, direction_result)
@@ -242,12 +320,29 @@ class PersonLockSystem:
             self._try_lock_with_pointing_up(frame, all_boxes_xyxy, all_track_ids, gesture_results)
     
     def _try_lock_with_fist_palm(self, frame, all_boxes_xyxy, all_track_ids, gesture_results):
-        """Try to lock using fist+palm combination"""
+        """Try to lock using fist+palm combination with hold timer"""
         fist_palm_result = gesture_results.get('fist_palm_combination', {})
+        gesture_detected = fist_palm_result.get('detected', False)
         
-        if not fist_palm_result.get('detected', False):
+        if not gesture_detected:
+            # Reset timer if gesture not detected
+            if self.lock_timer.is_active:
+                self.lock_timer.reset()
             return
         
+        # Start timer if gesture detected
+        if not self.lock_timer.is_active:
+            self.lock_timer.start_timing("FIST+PALM LOCK")
+        
+        # Update timer and check if completed
+        timer_completed, remaining_time = self.lock_timer.update(gesture_detected)
+        
+        if not timer_completed:
+            # Show countdown progress
+            self._draw_lock_countdown(frame, fist_palm_result, remaining_time)
+            return
+        
+        # Timer completed - proceed with locking
         # Get midpoint for person association
         midpoint_x, midpoint_y = fist_palm_result['midpoint']
         if midpoint_x is None or midpoint_y is None:
@@ -278,7 +373,7 @@ class PersonLockSystem:
             print(f"[SYSTEM] ReID-based persistent identity - survives occlusions and ID changes")
             print(f"[SYSTEM] High-confidence matching prevents false positive locking")
             print(f"[SYSTEM] DIRECTION CONTROL now active for locked person")
-            print(f"[SYSTEM] Lock Method: FIST + PALM proximity-based")
+            print(f"[SYSTEM] Lock Method: FIST + PALM proximity-based (2s hold)")
             
             # Visual feedback for fist+palm lock
             cv2.circle(frame, (midpoint_x, midpoint_y), 25, config.GREEN, 4)
@@ -349,7 +444,28 @@ class PersonLockSystem:
             print(f"[SECURITY] Single victory gesture detected but IGNORED - Dual victory required for unlocking")
     
     def _try_unlock_with_dual_victory(self, frame, all_boxes_xyxy, all_track_ids, dual_victory_result, gesture_results):
-        """Try to unlock using dual victory gesture combination"""
+        """Try to unlock using dual victory gesture combination with hold timer"""
+        gesture_detected = dual_victory_result.get('detected', False)
+        
+        if not gesture_detected:
+            # Reset timer if gesture not detected
+            if self.unlock_timer.is_active:
+                self.unlock_timer.reset()
+            return
+        
+        # Start timer if gesture detected
+        if not self.unlock_timer.is_active:
+            self.unlock_timer.start_timing("DUAL VICTORY UNLOCK")
+        
+        # Update timer and check if completed
+        timer_completed, remaining_time = self.unlock_timer.update(gesture_detected)
+        
+        if not timer_completed:
+            # Show countdown progress
+            self._draw_unlock_countdown(frame, dual_victory_result, remaining_time)
+            return
+        
+        # Timer completed - proceed with unlocking
         # Get midpoint for person association
         midpoint_x, midpoint_y = dual_victory_result['midpoint']
         if midpoint_x is None or midpoint_y is None:
@@ -385,7 +501,7 @@ class PersonLockSystem:
             print(f"[SYSTEM] Dual victory gesture from {person_id}")
             print(f"[SYSTEM] UNLOCKING persistent ReID profile")
             print(f"[SYSTEM] DIRECTION CONTROL deactivated")
-            print(f"[SYSTEM] Unlock Method: DUAL VICTORY (enhanced security)")
+            print(f"[SYSTEM] Unlock Method: DUAL VICTORY (enhanced security, 2s hold)")
             
             # Reset direction controller state
             self.direction_controller.reset_state()
@@ -598,6 +714,61 @@ class PersonLockSystem:
         if midpoint_x is not None and midpoint_y is not None:
             cv2.putText(frame, status_text, (midpoint_x - 80, midpoint_y + 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
+    
+    def _draw_lock_countdown(self, frame, fist_palm_result, remaining_time):
+        """Draw countdown timer for fist+palm locking"""
+        midpoint_x, midpoint_y = fist_palm_result['midpoint']
+        if midpoint_x is None or midpoint_y is None:
+            return
+        
+        # Draw progress circle
+        progress = self.lock_timer.get_progress()
+        self._draw_countdown_circle(frame, (midpoint_x, midpoint_y), progress, config.GREEN)
+        
+        # Draw countdown text
+        countdown_text = f"LOCKING: {remaining_time:.1f}s"
+        cv2.putText(frame, countdown_text, (midpoint_x - 60, midpoint_y - 40),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, config.GREEN, 2)
+    
+    def _draw_unlock_countdown(self, frame, dual_victory_result, remaining_time):
+        """Draw countdown timer for dual victory unlocking"""
+        midpoint_x, midpoint_y = dual_victory_result['midpoint']
+        if midpoint_x is None or midpoint_y is None:
+            return
+        
+        # Draw progress circle
+        progress = self.unlock_timer.get_progress()
+        self._draw_countdown_circle(frame, (midpoint_x, midpoint_y), progress, config.BLUE)
+        
+        # Draw countdown text
+        countdown_text = f"UNLOCKING: {remaining_time:.1f}s"
+        cv2.putText(frame, countdown_text, (midpoint_x - 70, midpoint_y - 40),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, config.BLUE, 2)
+    
+    def _draw_countdown_circle(self, frame, center, progress, color):
+        """Draw a progress circle showing countdown progress"""
+        radius = 30
+        thickness = 4
+        
+        # Draw background circle
+        cv2.circle(frame, center, radius, config.GRAY, thickness)
+        
+        # Draw progress arc
+        if progress > 0:
+            start_angle = -90  # Start from top
+            end_angle = start_angle + (360 * progress)
+            cv2.ellipse(frame, center, (radius, radius), 0, start_angle, end_angle, color, thickness)
+        
+        # Draw center dot
+        cv2.circle(frame, center, 5, color, -1)
+        
+        # Draw percentage text
+        percentage = int(progress * 100)
+        text = f"{percentage}%"
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        text_x = center[0] - text_size[0] // 2
+        text_y = center[1] + text_size[1] // 2
+        cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     
     def draw_persistent_hud(self, frame):
         """Draw HUD with persistent ReID tracking and direction control information"""

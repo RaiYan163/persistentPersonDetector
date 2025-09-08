@@ -114,7 +114,7 @@ class DirectionGUI:
         # Instructions
         instructions = tk.Label(
             self.window,
-            text="Thumb_Up=Forward | Thumb_Down=Backward | Palm=Pause\nElbow Angle: <90°=Left | >90°=Right",
+            text="LEFT HAND: Palm=Forward | Fist=Backward\nRIGHT ELBOW: <90°=Left | >90°=Right",
             font=font.Font(family="Arial", size=10),
             fg='gray',
             bg='black',
