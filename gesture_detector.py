@@ -1,6 +1,7 @@
 # gesture_detector.py - MediaPipe gesture recognition
 
 import cv2
+import math
 import numpy as np
 import mediapipe as mp
 from typing import List, Tuple, Dict
@@ -14,6 +15,70 @@ try:
     from mediapipe.tasks.python.vision import RunningMode
 except Exception:
     from mediapipe.tasks.python.vision.core.vision_task_running_mode import VisionTaskRunningMode as RunningMode
+
+# Helper functions for fist+palm detection
+def calculate_hand_centers_distance(hand1_landmarks, hand2_landmarks, frame_shape):
+    """
+    Calculate distance between two hand centers (wrist positions).
+    Returns both pixel distance and normalized distance ratio.
+    """
+    if not hand1_landmarks or not hand2_landmarks or len(hand1_landmarks) < 1 or len(hand2_landmarks) < 1:
+        return float('inf'), float('inf')
+    
+    # Get wrist positions (landmark 0 is always the wrist)
+    wrist1_x = hand1_landmarks[0][0]  # hand1 wrist X
+    wrist1_y = hand1_landmarks[0][1]  # hand1 wrist Y
+    wrist2_x = hand2_landmarks[0][0]  # hand2 wrist X
+    wrist2_y = hand2_landmarks[0][1]  # hand2 wrist Y
+    
+    # Calculate pixel distance
+    pixel_distance = math.sqrt((wrist1_x - wrist2_x)**2 + (wrist1_y - wrist2_y)**2)
+    
+    # Calculate frame diagonal for normalization
+    H, W = frame_shape[:2]
+    frame_diagonal = math.sqrt(W*W + H*H)
+    
+    # Calculate normalized distance ratio
+    distance_ratio = pixel_distance / frame_diagonal
+    
+    return pixel_distance, distance_ratio
+
+def calculate_hand_midpoint(hand1_landmarks, hand2_landmarks):
+    """Calculate midpoint between two hand centers."""
+    if not hand1_landmarks or not hand2_landmarks or len(hand1_landmarks) < 1 or len(hand2_landmarks) < 1:
+        return None, None
+    
+    wrist1_x, wrist1_y = hand1_landmarks[0][0], hand1_landmarks[0][1]
+    wrist2_x, wrist2_y = hand2_landmarks[0][0], hand2_landmarks[0][1]
+    
+    midpoint_x = int((wrist1_x + wrist2_x) / 2)
+    midpoint_y = int((wrist1_y + wrist2_y) / 2)
+    
+    return midpoint_x, midpoint_y
+
+def is_closed_fist(gesture_categories):
+    """Check if gesture is closed fist."""
+    if not gesture_categories:
+        return False, 0.0
+    
+    for cat in gesture_categories:
+        name = (cat.category_name or "").lower().replace("-", "_").replace(" ", "_")
+        if name in ["closed_fist", "fist"]:
+            return True, float(cat.score)
+    
+    return False, 0.0
+
+def is_open_palm(gesture_categories):
+    """Check if gesture is open palm."""
+    if not gesture_categories:
+        return False, 0.0
+    
+    for cat in gesture_categories:
+        name = (cat.category_name or "").lower().replace("-", "_").replace(" ", "_")
+        if name in ["open_palm", "palm"]:
+            return True, float(cat.score)
+    
+    return False, 0.0
 
 class GestureDetector:
     """
@@ -116,9 +181,13 @@ class GestureDetector:
                     'label': hand_data['gesture']
                 })
         
+        # Add fist+palm detection
+        fist_palm_result = self.detect_fist_palm_combination(all_hands_data, (H, W))
+
         return {
             'pointing_up_list': pointing_up_list,
             'victory_list': victory_list,
+            'fist_palm_combination': fist_palm_result,  # NEW
             'all_hands_data': all_hands_data
         }
     
@@ -188,6 +257,103 @@ class GestureDetector:
             })
         
         return gesture_data
+    
+    def detect_fist_palm_combination(self, all_hands_data, frame_shape):
+        """
+        Detect fist + palm combination with proximity validation.
+        Returns detection result with midpoint for person association.
+        """
+        # Initialize result structure
+        result = {
+            'detected': False,
+            'fist_hand_idx': None,
+            'palm_hand_idx': None,
+            'midpoint': (None, None),
+            'distance_pixels': float('inf'),
+            'distance_ratio': float('inf'),
+            'fist_confidence': 0.0,
+            'palm_confidence': 0.0,
+            'close_enough': False
+        }
+        
+        # Must have exactly 2 hands
+        if len(all_hands_data) != config.FIST_PALM_REQUIRED_HANDS:
+            return result
+        
+        hand1 = all_hands_data[0]
+        hand2 = all_hands_data[1]
+        
+        # Check if we have the fist + palm combination
+        hand1_is_fist, hand1_fist_score = is_closed_fist([type('obj', (object,), {'category_name': hand1['gesture'], 'score': hand1['score']})()])
+        hand1_is_palm, hand1_palm_score = is_open_palm([type('obj', (object,), {'category_name': hand1['gesture'], 'score': hand1['score']})()])
+        
+        hand2_is_fist, hand2_fist_score = is_closed_fist([type('obj', (object,), {'category_name': hand2['gesture'], 'score': hand2['score']})()])
+        hand2_is_palm, hand2_palm_score = is_open_palm([type('obj', (object,), {'category_name': hand2['gesture'], 'score': hand2['score']})()])
+        
+        # Check for valid combinations (order independent)
+        fist_hand_idx = None
+        palm_hand_idx = None
+        fist_confidence = 0.0
+        palm_confidence = 0.0
+        
+        if hand1_is_fist and hand2_is_palm:
+            # Hand 1 is fist, Hand 2 is palm
+            fist_hand_idx = 0
+            palm_hand_idx = 1
+            fist_confidence = hand1_fist_score
+            palm_confidence = hand2_palm_score
+        elif hand1_is_palm and hand2_is_fist:
+            # Hand 1 is palm, Hand 2 is fist
+            fist_hand_idx = 1
+            palm_hand_idx = 0
+            fist_confidence = hand2_fist_score
+            palm_confidence = hand1_palm_score
+        else:
+            # No valid combination found
+            return result
+        
+        # Check confidence thresholds
+        if (fist_confidence < config.FIST_PALM_MIN_CONFIDENCE or 
+            palm_confidence < config.FIST_PALM_MIN_CONFIDENCE):
+            return result
+        
+        # Calculate distance between hands
+        hand1_landmarks = hand1['landmarks']
+        hand2_landmarks = hand2['landmarks']
+        
+        pixel_distance, distance_ratio = calculate_hand_centers_distance(
+            hand1_landmarks, hand2_landmarks, frame_shape
+        )
+        
+        # Check if hands are close enough
+        close_enough = (pixel_distance <= config.FIST_PALM_MAX_DISTANCE_PIXELS or 
+                       distance_ratio <= config.FIST_PALM_MAX_DISTANCE_RATIO)
+        
+        # Calculate midpoint for person association
+        midpoint_x, midpoint_y = calculate_hand_midpoint(hand1_landmarks, hand2_landmarks)
+        
+        # Update result
+        result.update({
+            'detected': close_enough,  # Only true if close enough
+            'fist_hand_idx': fist_hand_idx,
+            'palm_hand_idx': palm_hand_idx,
+            'midpoint': (midpoint_x, midpoint_y),
+            'distance_pixels': pixel_distance,
+            'distance_ratio': distance_ratio,
+            'fist_confidence': fist_confidence,
+            'palm_confidence': palm_confidence,
+            'close_enough': close_enough
+        })
+        
+        # Debug information
+        if result['detected']:
+            print(f"[FIST+PALM] DETECTED: Fist confidence={fist_confidence:.2f}, "
+                  f"Palm confidence={palm_confidence:.2f}, Distance={pixel_distance:.0f}px")
+        elif fist_hand_idx is not None and palm_hand_idx is not None:
+            print(f"[FIST+PALM] Gestures OK but TOO FAR: Distance={pixel_distance:.0f}px "
+                  f"(max={config.FIST_PALM_MAX_DISTANCE_PIXELS}px)")
+        
+        return result
     
     @staticmethod
     def _is_pointing_up(gesture_categories) -> Tuple[bool, float, str]:

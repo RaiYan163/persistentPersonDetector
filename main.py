@@ -11,7 +11,8 @@ from target_tracker import TargetTracker
 from direction_controller import DirectionController
 from direction_gui import direction_gui
 from utils import (
-    associate_gesture_to_person, 
+    associate_gesture_to_person,
+    associate_fist_palm_to_person, 
     draw_hand_landmarks, 
     draw_person_boxes,
     draw_locked_target, 
@@ -80,7 +81,16 @@ class PersonLockSystem:
         print("[SYSTEM] Person Lock System initialized with PERSISTENT ReID tracking")
         print("[SYSTEM] Security: High-confidence persistent person identification")
         print("[SYSTEM] Features: Survives occlusions, prevents false positives, 15s timeout")
-        print("[SYSTEM] Lock Gesture: POINTING UP (index finger pointing upward)")
+        
+        # Display current locking mode
+        if config.LOCKING_MODE == "FIST_PALM":
+            print(f"[SYSTEM] Locking Mode: FIST_PALM (Fist + Palm proximity-based)")
+            print(f"[SYSTEM] Proximity thresholds: {config.FIST_PALM_MAX_DISTANCE_PIXELS}px OR {config.FIST_PALM_MAX_DISTANCE_RATIO*100:.0f}% of frame diagonal")
+            print("[SYSTEM] Lock Gesture: FIST + PALM (close together)")
+        else:
+            print(f"[SYSTEM] Locking Mode: POINTING_UP (Original single-gesture)")
+            print("[SYSTEM] Lock Gesture: POINTING UP (index finger pointing upward)")
+        
         print("[SYSTEM] Unlock Gesture: VICTORY (peace sign)")
         print("[SYSTEM] DIRECTION CONTROL: Active when person is locked")
         print("[SYSTEM] Direction Commands: Fist=Forward, Thumb=Backward, Palm=Pause, Elbow angle=Left/Right")
@@ -220,10 +230,71 @@ class PersonLockSystem:
             self.try_unlock_target_secure(frame, all_boxes_xyxy, all_track_ids, gesture_results)
     
     def try_lock_target(self, frame, all_boxes_xyxy, all_track_ids, gesture_results):
-        """Try to lock onto a person showing pointing up gesture"""
+        """Try to lock onto a person using the configured locking mode"""
+        if all_boxes_xyxy is None or len(all_boxes_xyxy) == 0:
+            return
+        
+        # Mode switching: choose between FIST_PALM and POINTING_UP
+        if config.LOCKING_MODE == "FIST_PALM":
+            self._try_lock_with_fist_palm(frame, all_boxes_xyxy, all_track_ids, gesture_results)
+        else:  # POINTING_UP mode (fallback)
+            self._try_lock_with_pointing_up(frame, all_boxes_xyxy, all_track_ids, gesture_results)
+    
+    def _try_lock_with_fist_palm(self, frame, all_boxes_xyxy, all_track_ids, gesture_results):
+        """Try to lock using fist+palm combination"""
+        fist_palm_result = gesture_results.get('fist_palm_combination', {})
+        
+        if not fist_palm_result.get('detected', False):
+            return
+        
+        # Get midpoint for person association
+        midpoint_x, midpoint_y = fist_palm_result['midpoint']
+        if midpoint_x is None or midpoint_y is None:
+            return
+        
+        # Get hand landmarks for association
+        all_hands_data = gesture_results.get('all_hands_data', [])
+        if len(all_hands_data) < 2:
+            return
+        
+        hand1_landmarks = all_hands_data[0]['landmarks']
+        hand2_landmarks = all_hands_data[1]['landmarks']
+        
+        # Associate gesture combination to person
+        person_idx = associate_fist_palm_to_person(
+            midpoint_x, midpoint_y, hand1_landmarks, hand2_landmarks, 
+            all_boxes_xyxy, frame.shape[:2]
+        )
+        
+        if person_idx is not None:
+            # Lock onto this specific person
+            target_box = all_boxes_xyxy[person_idx]
+            target_id = int(all_track_ids[person_idx]) if all_track_ids is not None else None
+            
+            self.tracker.lock_target(frame, target_box, target_id)
+            
+            print(f"[SYSTEM] PERSISTENT LOCK created for person with Track ID {target_id}")
+            print(f"[SYSTEM] ReID-based persistent identity - survives occlusions and ID changes")
+            print(f"[SYSTEM] High-confidence matching prevents false positive locking")
+            print(f"[SYSTEM] DIRECTION CONTROL now active for locked person")
+            print(f"[SYSTEM] Lock Method: FIST + PALM proximity-based")
+            
+            # Visual feedback for fist+palm lock
+            cv2.circle(frame, (midpoint_x, midpoint_y), 25, config.GREEN, 4)
+            cv2.putText(frame, "LOCKED!", (midpoint_x + 30, midpoint_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, config.GREEN, 3)
+            
+            # Draw line between hands to show combination
+            if len(all_hands_data) >= 2 and hand1_landmarks and hand2_landmarks:
+                hand1_center = hand1_landmarks[0]
+                hand2_center = hand2_landmarks[0]
+                cv2.line(frame, hand1_center, hand2_center, config.GREEN, 3)
+    
+    def _try_lock_with_pointing_up(self, frame, all_boxes_xyxy, all_track_ids, gesture_results):
+        """Try to lock using pointing up gesture (fallback mode)"""
         pointing_up_list = gesture_results['pointing_up_list']
         
-        if not pointing_up_list or all_boxes_xyxy is None or len(all_boxes_xyxy) == 0:
+        if not pointing_up_list:
             return
         
         # Get best pointing up gesture
@@ -248,6 +319,7 @@ class PersonLockSystem:
             print(f"[SYSTEM] ReID-based persistent identity - survives occlusions and ID changes")
             print(f"[SYSTEM] High-confidence matching prevents false positive locking")
             print(f"[SYSTEM] DIRECTION CONTROL now active for locked person")
+            print(f"[SYSTEM] Lock Method: POINTING UP (fallback mode)")
             
             # Visual feedback
             cv2.circle(frame, (gesture_x, gesture_y), 25, config.GREEN, 4)
@@ -335,6 +407,13 @@ class PersonLockSystem:
         """Draw hand landmarks and gesture information"""
         all_hands = gesture_results['all_hands_data']
         
+        # Handle fist+palm combination display (when in FIST_PALM mode and not locked)
+        if (config.LOCKING_MODE == "FIST_PALM" and not self.tracker.is_locked):
+            fist_palm_result = gesture_results.get('fist_palm_combination', {})
+            if fist_palm_result.get('detected', False):
+                self.draw_fist_palm_combination(frame, gesture_results, fist_palm_result)
+                return  # Skip individual hand drawing when showing combination
+        
         for hand_data in all_hands:
             landmarks = hand_data['landmarks']
             if not landmarks:
@@ -371,6 +450,58 @@ class PersonLockSystem:
                 cv2.putText(frame, gesture_text, (wrist_x + 10, wrist_y - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
+    def draw_fist_palm_combination(self, frame, gesture_results, fist_palm_result):
+        """Draw special visualization for fist+palm combination"""
+        all_hands_data = gesture_results.get('all_hands_data', [])
+        
+        if len(all_hands_data) < 2:
+            return
+        
+        fist_hand_idx = fist_palm_result.get('fist_hand_idx')
+        palm_hand_idx = fist_palm_result.get('palm_hand_idx')
+        
+        if fist_hand_idx is None or palm_hand_idx is None:
+            return
+        
+        fist_hand = all_hands_data[fist_hand_idx]
+        palm_hand = all_hands_data[palm_hand_idx]
+        
+        # Draw fist hand in red
+        if fist_hand['landmarks']:
+            draw_hand_landmarks(frame, fist_hand['landmarks'], config.RED, 3)
+            wrist_pos = fist_hand['landmarks'][0]
+            cv2.putText(frame, "FIST", (wrist_pos[0] + 15, wrist_pos[1] - 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.RED, 2)
+        
+        # Draw palm hand in green
+        if palm_hand['landmarks']:
+            draw_hand_landmarks(frame, palm_hand['landmarks'], config.GREEN, 3)
+            wrist_pos = palm_hand['landmarks'][0]
+            cv2.putText(frame, "PALM", (wrist_pos[0] + 15, wrist_pos[1] - 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.GREEN, 2)
+        
+        # Draw connection line between hands
+        if fist_hand['landmarks'] and palm_hand['landmarks']:
+            fist_center = fist_hand['landmarks'][0]
+            palm_center = palm_hand['landmarks'][0]
+            cv2.line(frame, fist_center, palm_center, config.YELLOW, 2)
+        
+        # Draw midpoint
+        midpoint_x, midpoint_y = fist_palm_result['midpoint']
+        if midpoint_x is not None and midpoint_y is not None:
+            cv2.circle(frame, (midpoint_x, midpoint_y), 8, config.CYAN, -1)
+        
+        # Draw distance information
+        distance_pixels = fist_palm_result.get('distance_pixels', 0)
+        close_enough = fist_palm_result.get('close_enough', False)
+        
+        status_color = config.GREEN if close_enough else config.RED
+        status_text = f"Distance: {distance_pixels:.0f}px {'READY' if close_enough else 'TOO FAR'}"
+        
+        if midpoint_x is not None and midpoint_y is not None:
+            cv2.putText(frame, status_text, (midpoint_x - 50, midpoint_y + 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
+    
     def draw_persistent_hud(self, frame):
         """Draw HUD with persistent ReID tracking and direction control information"""
         H = frame.shape[0]
@@ -382,11 +513,17 @@ class PersonLockSystem:
             cv2.putText(frame, "VICTORY to unlock", (20, H - 50),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         else:
-            # Unlocked mode - minimal info
+            # Unlocked mode - show instructions based on mode
             cv2.putText(frame, "READY FOR LOCK", (20, H - 80),
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, config.GREEN, 3)
-            cv2.putText(frame, "POINTING UP to lock", (20, H - 50),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
+            
+            # Mode-specific instructions
+            if config.LOCKING_MODE == "FIST_PALM":
+                cv2.putText(frame, "FIST + PALM (close together) to lock", (20, H - 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
+            else:
+                cv2.putText(frame, "POINTING UP to lock", (20, H - 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         
         cv2.putText(frame, "r: reset | q: quit | f: fullscreen", (20, H - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.WHITE, 2)

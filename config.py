@@ -14,6 +14,19 @@ DEFAULT_IOU = 0.5    # YOLO IoU threshold
 DEFAULT_GESTURE_CONF = 0.50  # Minimum confidence for thumbs-up
 MAX_HANDS = 4                # Maximum hands to detect
 
+# ==============================================================================
+# LOCKING MODE CONFIGURATION - CHANGE THIS LINE TO SWITCH MODES
+# ==============================================================================
+# Available modes: "FIST_PALM" or "POINTING_UP"
+LOCKING_MODE = "FIST_PALM"  # <-- CODER CHANGES THIS LINE TO SWITCH
+# ==============================================================================
+
+# Fist + Palm proximity-based locking settings (only used if LOCKING_MODE = "FIST_PALM")
+FIST_PALM_MIN_CONFIDENCE = 0.45        # Minimum confidence for each gesture
+FIST_PALM_MAX_DISTANCE_PIXELS = 400      # Max pixels between hand centers
+FIST_PALM_MAX_DISTANCE_RATIO = 0.30      # Max distance as ratio of frame diagonal
+FIST_PALM_REQUIRED_HANDS = 2             # Must detect exactly 2 hands
+
 # ReID settings for persistent tracking
 DEFAULT_SIM_THRESH = 0.30    # Base similarity threshold (not used directly)
 DEFAULT_LOSS_TIMEOUT = 15.0  # Seconds before auto-unlock (CHANGED from 5.0 to 15.0)

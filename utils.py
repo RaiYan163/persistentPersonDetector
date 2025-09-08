@@ -96,6 +96,73 @@ def associate_gesture_to_person(gesture_x: int, gesture_y: int,
     print(f"[ASSOC] Gesture at ({gesture_x},{gesture_y}) -> No person associated")
     return None
 
+def associate_fist_palm_to_person(midpoint_x: int, midpoint_y: int, 
+                                 hand1_landmarks: List[Tuple[int, int]], 
+                                 hand2_landmarks: List[Tuple[int, int]],
+                                 boxes_xyxy: np.ndarray, 
+                                 frame_shape: Tuple[int, int]) -> Optional[int]:
+    """
+    Associate fist+palm gesture combination to the nearest person.
+    Uses midpoint between hands as primary association point.
+    
+    Args:
+        midpoint_x, midpoint_y: Midpoint between the two hands
+        hand1_landmarks, hand2_landmarks: Hand landmark positions
+        boxes_xyxy: Person bounding boxes
+        frame_shape: Frame dimensions
+        
+    Returns:
+        Index of the person or None if no association found
+    """
+    if boxes_xyxy is None or len(boxes_xyxy) == 0:
+        return None
+    
+    if midpoint_x is None or midpoint_y is None:
+        return None
+    
+    H, W = frame_shape
+    
+    # Method 1: Try midpoint inside expanded bounding boxes
+    for i, box in enumerate(boxes_xyxy):
+        expanded_box = expand_box(box, expansion_factor=0.5)  # Larger expansion for two hands
+        if point_in_box(midpoint_x, midpoint_y, expanded_box):
+            print(f"[ASSOC] Fist+Palm midpoint ({midpoint_x},{midpoint_y}) -> Person {i} (expanded box)")
+            return i
+    
+    # Method 2: Try if both hands are near the same person
+    for i, box in enumerate(boxes_xyxy):
+        expanded_box = expand_box(box, expansion_factor=0.6)
+        
+        # Check if both hand centers are near this person
+        hand1_center = hand1_landmarks[0] if hand1_landmarks else (0, 0)
+        hand2_center = hand2_landmarks[0] if hand2_landmarks else (0, 0)
+        
+        hand1_near = point_in_box(hand1_center[0], hand1_center[1], expanded_box)
+        hand2_near = point_in_box(hand2_center[0], hand2_center[1], expanded_box)
+        
+        if hand1_near and hand2_near:
+            print(f"[ASSOC] Both hands near Person {i}")
+            return i
+    
+    # Method 3: Find nearest person to midpoint
+    max_distance = math.sqrt(W*W + H*H) * 0.3  # 30% of diagonal
+    best_distance = float('inf')
+    best_idx = None
+    
+    for i, box in enumerate(boxes_xyxy):
+        cx, cy = box_center(box)
+        distance = math.hypot(midpoint_x - cx, midpoint_y - cy)
+        if distance < max_distance and distance < best_distance:
+            best_distance = distance
+            best_idx = i
+    
+    if best_idx is not None:
+        print(f"[ASSOC] Fist+Palm midpoint ({midpoint_x},{midpoint_y}) -> Person {best_idx} (nearest, dist={best_distance:.1f})")
+        return best_idx
+    
+    print(f"[ASSOC] Fist+Palm midpoint ({midpoint_x},{midpoint_y}) -> No person associated")
+    return None
+
 def draw_hand_landmarks(frame: np.ndarray, landmarks: List[Tuple[int, int]], 
                        color=config.BLUE, thickness: int = 2):
     """Draw hand landmarks and connections on the frame"""
