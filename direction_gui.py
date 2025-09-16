@@ -23,6 +23,13 @@ class DirectionGUI:
         self.current_lr = "None"
         self.is_locked = False
         
+        # Button states
+        self.button_states = {
+            'button_a': "None",
+            'button_b': "None", 
+            'button_c': "None"
+        }
+        
         # Thread for GUI
         self.gui_thread = None
         
@@ -54,7 +61,7 @@ class DirectionGUI:
         # Create main window
         self.window = tk.Tk()
         self.window.title("Direction Control")
-        self.window.geometry("400x300")
+        self.window.geometry("500x400")  # Increased size for button controls
         self.window.configure(bg='black')
         
         # Make window stay on top
@@ -111,16 +118,38 @@ class DirectionGUI:
         )
         self.lr_label.pack(pady=5)
         
-        # Instructions
-        instructions = tk.Label(
-            self.window,
-            text="LEFT HAND: Palm=Forward | Fist=Backward\nRIGHT ELBOW: <90°=Left | >90°=Right",
-            font=font.Font(family="Arial", size=10),
-            fg='gray',
-            bg='black',
-            justify='center'
-        )
-        instructions.pack(side='bottom', pady=10)
+        # Button Controls Section
+        tk.Label(
+            self.window, 
+            text="BUTTON CONTROLS:", 
+            font=small_font,
+            fg='white',
+            bg='black'
+        ).pack(pady=(20, 5))
+        
+        # Button controls frame
+        button_frame = tk.Frame(self.window, bg='black')
+        button_frame.pack(pady=5)
+        
+        # Button A
+        self.button_a_label = tk.Label(button_frame, text="A", 
+                                     font=font.Font(family="Arial", size=18),
+                                     fg='gray', bg='black')
+        self.button_a_label.pack(side='left', padx=20)
+        
+        # Button B  
+        self.button_b_label = tk.Label(button_frame, text="B",
+                                     font=font.Font(family="Arial", size=18),
+                                     fg='gray', bg='black')
+        self.button_b_label.pack(side='left', padx=20)
+        
+        # Button C
+        self.button_c_label = tk.Label(button_frame, text="C",
+                                     font=font.Font(family="Arial", size=18),
+                                     fg='gray', bg='black')
+        self.button_c_label.pack(side='left', padx=20)
+        
+        # Instructions removed as requested by user
         
         # Handle window close
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -152,12 +181,12 @@ class DirectionGUI:
             fb_text = self.current_fb.upper() if self.current_fb != "None" else "NONE"
             self.fb_label.config(text=fb_text)
             
-            # Color coding for forward/backward
-            if self.current_fb == "Forward":
+            # Color coding for forward/backward (fixed to match uppercase commands)
+            if self.current_fb == "FORWARD":
                 self.fb_label.config(fg='lime')
-            elif self.current_fb == "Backward":
+            elif self.current_fb == "BACKWARD":
                 self.fb_label.config(fg='red')
-            elif self.current_fb == "Pause":
+            elif self.current_fb == "PAUSE":
                 self.fb_label.config(fg='yellow')
             else:
                 self.fb_label.config(fg='gray')
@@ -166,13 +195,16 @@ class DirectionGUI:
             lr_text = self.current_lr.upper() if self.current_lr != "None" else "NONE"
             self.lr_label.config(text=lr_text)
             
-            # Color coding for left/right
-            if self.current_lr == "Left":
+            # Color coding for left/right (fixed to match uppercase commands)
+            if self.current_lr == "LEFT":
                 self.lr_label.config(fg='orange')
-            elif self.current_lr == "Right":
+            elif self.current_lr == "RIGHT":
                 self.lr_label.config(fg='cyan')
             else:
                 self.lr_label.config(fg='gray')
+            
+            # Update button controls
+            self._update_button_displays()
             
             # Schedule next update
             self.window.after(100, self._update_display)  # Update every 100ms
@@ -180,20 +212,65 @@ class DirectionGUI:
         except Exception as e:
             print(f"[GUI] Update error: {e}")
     
+    def _update_button_displays(self):
+        """Update button control displays"""
+        try:
+            # Import font locally
+            from tkinter import font
+            
+            # Button A
+            if self.button_states['button_a'] == 'BUTTON_A':
+                self.button_a_label.config(text="A", fg='lime', 
+                                         font=font.Font(family="Arial", size=18, weight="bold"))
+            else:
+                self.button_a_label.config(text="A", fg='gray',
+                                         font=font.Font(family="Arial", size=18))
+            
+            # Button B  
+            if self.button_states['button_b'] == 'BUTTON_B':
+                self.button_b_label.config(text="B", fg='lime',
+                                         font=font.Font(family="Arial", size=18, weight="bold"))
+            else:
+                self.button_b_label.config(text="B", fg='gray',
+                                         font=font.Font(family="Arial", size=18))
+            
+            # Button C
+            if self.button_states['button_c'] == 'BUTTON_C':
+                self.button_c_label.config(text="C", fg='lime',
+                                         font=font.Font(family="Arial", size=18, weight="bold"))
+            else:
+                self.button_c_label.config(text="C", fg='gray',
+                                         font=font.Font(family="Arial", size=18))
+                
+        except Exception as e:
+            print(f"[GUI] Button update error: {e}")
+    
     def _on_close(self):
         """Handle window close event"""
         self.stop_gui()
     
-    def update_commands(self, fb_command: Optional[str], lr_command: Optional[str]):
+    def update_commands(self, fb_command: Optional[str], lr_command: Optional[str], button_states: Optional[Dict] = None):
         """
         Update the displayed commands.
         
         Args:
             fb_command: Forward/Backward/Pause command or None
             lr_command: Left/Right command or None
+            button_states: Dictionary with button states {'button_a': cmd, 'button_b': cmd, 'button_c': cmd}
         """
         self.current_fb = fb_command if fb_command else "None"
         self.current_lr = lr_command if lr_command else "None"
+        
+        # Update button states if provided
+        if button_states:
+            self.button_states = {
+                'button_a': button_states.get('button_a', 'None'),
+                'button_b': button_states.get('button_b', 'None'),
+                'button_c': button_states.get('button_c', 'None')
+            }
+            # Force immediate GUI update for button states
+            if hasattr(self, 'window') and self.window:
+                self._update_button_displays()
     
     def set_lock_status(self, is_locked: bool):
         """

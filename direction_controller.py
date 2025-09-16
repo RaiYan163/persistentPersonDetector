@@ -25,12 +25,45 @@ HAND_PATH = "hand_landmarker.task"
 GESTURE_URL = "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task"
 GESTURE_PATH = "gesture_recognizer.task"
 
-# Direction control configuration - Left hand palm/fist control
-LEFT_HAND_GESTURE_TO_FB = {
-    "Open_Palm": "Forward",
-    "Closed_Fist": "Backward", 
-    # No pause gesture - neutral position when no clear gesture detected
-}
+# Direction control configuration - Dynamic gesture mapping
+def load_gesture_mappings():
+    """Load gesture mappings from configuration file"""
+    import json
+    import os
+    
+    # Default mappings (all gestures can map to any command)
+    default_mappings = {
+        "Open_Palm": "FORWARD",
+        "Closed_Fist": "BACKWARD",
+        "Thumb_Up": "BUTTON_A", 
+        "Thumb_Down": "BUTTON_B",
+        "Pointing_Up": "BUTTON_C",
+        "Right_Elbow_Extended": "RIGHT",
+        "Right_Elbow_Bent": "LEFT"
+    }
+    
+    # Try to load from runtime config file
+    config_file = "runtime_gesture_config.json"
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config_data = json.load(f)
+                user_mappings = config_data.get("gesture_mappings", {})
+                
+                # Validate that user mappings has the essential gestures
+                if user_mappings and len(user_mappings) > 0:
+                    print(f"[DIRECTION] Loaded custom gesture mappings from {config_file}")
+                    return user_mappings
+                else:
+                    print(f"[DIRECTION] Custom mappings file empty, using defaults")
+        except Exception as e:
+            print(f"[DIRECTION] Error loading custom mappings: {e}, using defaults")
+    
+    print("[DIRECTION] Using default gesture mappings")
+    return default_mappings
+
+# Load gesture mappings (will be reloaded when controller is initialized)
+GESTURE_MAPPINGS = load_gesture_mappings()
 
 # Control parameters
 FB_HOLD_SECONDS = 0.8  # Hold last command briefly on dropouts
@@ -72,11 +105,21 @@ class DirectionController:
         """Initialize the direction controller with MediaPipe models"""
         self.initialize_models()
         
+        # Load current gesture mappings
+        self.gesture_mappings = load_gesture_mappings()
+        
         # Direction control state
         self.last_fb = None
         self.last_lr = None
         self.last_print_time = 0.0
         self.last_fb_seen_time = 0.0
+        
+        # Button control state
+        self.button_states = {
+            'button_a': None,
+            'button_b': None,
+            'button_c': None
+        }
         
         # Right elbow angle smoothing
         self.right_angle_buf = deque(maxlen=ANGLE_SMOOTH_N)
@@ -85,8 +128,23 @@ class DirectionController:
         self.start_time = time.perf_counter()
         
         print("[DIRECTION] Direction controller initialized")
-        print("[DIRECTION] Forward/Backward: LEFT HAND (Open_Palm=Forward, Closed_Fist=Backward)")
-        print("[DIRECTION] Left/Right: Right elbow angle (< 90° = Left, > 90° = Right)")
+        print("[DIRECTION] Using custom gesture mappings:")
+        
+        # Print current forward/backward mappings
+        fb_mappings = []
+        for gesture, command in self.gesture_mappings.items():
+            if command in ["FORWARD", "BACKWARD"]:
+                fb_mappings.append(f"{gesture}={command}")
+        if fb_mappings:
+            print(f"[DIRECTION] Forward/Backward: {', '.join(fb_mappings)}")
+        
+        # Print current left/right mappings
+        lr_mappings = []
+        for gesture, command in self.gesture_mappings.items():
+            if command in ["LEFT", "RIGHT"]:
+                lr_mappings.append(f"{gesture}={command}")
+        if lr_mappings:
+            print(f"[DIRECTION] Left/Right: {', '.join(lr_mappings)}")
     
     def initialize_models(self):
         """Initialize MediaPipe models for pose and gesture detection"""
@@ -179,12 +237,16 @@ class DirectionController:
             if main_gesture_results:
                 fb_command = self._analyze_main_gestures_for_fb(main_gesture_results, current_time)
             
+            # Analyze button gestures from main gesture results
+            self._analyze_button_gestures(main_gesture_results, current_time)
+            
             # Check for command changes and print
             self._handle_command_output(fb_command, lr_command, current_time)
             
             return {
                 'forward_backward': fb_command,
                 'left_right': lr_command,
+                'button_states': self.button_states.copy(),
                 'crop_region': (crop_x1, crop_y1, crop_x2, crop_y2),
                 'pose_landmarks': pose_result.pose_landmarks[0] if pose_result.pose_landmarks else None
             }
@@ -194,7 +256,7 @@ class DirectionController:
             return None
     
     def _analyze_pose_for_lr(self, pose_result, crop_shape) -> Optional[str]:
-        """Analyze pose landmarks for left/right control based on right elbow angle"""
+        """Analyze pose landmarks for left/right control based on elbow angles"""
         if not pose_result.pose_landmarks:
             return self.last_lr
         
@@ -202,21 +264,58 @@ class DirectionController:
         h, w = crop_shape[:2]
         
         try:
+            # Check both right and left elbow based on user configuration
+            best_command = None
+            
             # Right arm landmarks: shoulder(12) -> elbow(14) -> wrist(16)
             right_shoulder = to_px(landmarks[12], w, h)
             right_elbow = to_px(landmarks[14], w, h)
             right_wrist = to_px(landmarks[16], w, h)
             
             # Calculate right elbow angle
-            elbow_angle = angle_3pts(right_shoulder, right_elbow, right_wrist)
+            right_angle = angle_3pts(right_shoulder, right_elbow, right_wrist)
             
-            if elbow_angle is not None:
+            if right_angle is not None:
                 # Smooth the angle
-                self.right_angle_buf.append(elbow_angle)
+                self.right_angle_buf.append(right_angle)
                 smoothed_angle = sum(self.right_angle_buf) / len(self.right_angle_buf)
                 
-                # Determine left/right based on threshold
-                return "Right" if smoothed_angle > LR_THRESHOLD else "Left"
+                # Determine gesture based on angle
+                if smoothed_angle > LR_THRESHOLD:
+                    right_gesture = "Right_Elbow_Extended"
+                else:
+                    right_gesture = "Right_Elbow_Bent"
+                
+                # Check if this gesture maps to a command
+                mapped_command = self.gesture_mappings.get(right_gesture)
+                if mapped_command in ["LEFT", "RIGHT", "PAUSE"]:
+                    best_command = mapped_command
+            
+            # Left arm landmarks: shoulder(11) -> elbow(13) -> wrist(15)
+            try:
+                left_shoulder = to_px(landmarks[11], w, h)
+                left_elbow = to_px(landmarks[13], w, h)
+                left_wrist = to_px(landmarks[15], w, h)
+                
+                # Calculate left elbow angle
+                left_angle = angle_3pts(left_shoulder, left_elbow, left_wrist)
+                
+                if left_angle is not None:
+                    # Determine gesture based on angle
+                    if left_angle > LR_THRESHOLD:
+                        left_gesture = "Left_Elbow_Extended"
+                    else:
+                        left_gesture = "Left_Elbow_Bent"
+                    
+                    # Check if this gesture maps to a command (prioritize if no right command)
+                    mapped_command = self.gesture_mappings.get(left_gesture)
+                    if mapped_command in ["LEFT", "RIGHT", "PAUSE"] and not best_command:
+                        best_command = mapped_command
+                        
+            except (IndexError, AttributeError):
+                pass  # Left arm not visible
+                
+            return best_command if best_command else self.last_lr
             
         except (IndexError, AttributeError):
             pass
@@ -252,9 +351,10 @@ class DirectionController:
         
         if left_hand_gesture:
             gesture_name = left_hand_gesture.category_name
-            mapped_command = LEFT_HAND_GESTURE_TO_FB.get(gesture_name)
+            # Use dynamic gesture mappings instead of hardcoded LEFT_HAND_GESTURE_TO_FB
+            mapped_command = self.gesture_mappings.get(gesture_name)
             
-            if mapped_command:
+            if mapped_command and mapped_command in ["FORWARD", "BACKWARD", "PAUSE"]:
                 self.last_fb_seen_time = current_time
                 print(f"[DIRECTION] Left hand {gesture_name} -> {mapped_command}")
                 return mapped_command
@@ -278,34 +378,80 @@ class DirectionController:
         
         all_hands_data = main_gesture_results['all_hands_data']
         
-        # Look for left hand gestures specifically
-        left_hand_gesture = None
-        left_hand_score = 0.0
+        # Look for any hand gestures that map to forward/backward
+        best_gesture = None
+        best_score = 0.0
+        best_command = None
         
         for hand_data in all_hands_data:
-            # Note: The main gesture detector doesn't provide handedness directly
-            # For now, we'll check all hands for palm/fist gestures
-            # This is a limitation we'll need to address
             gesture_name = hand_data.get('gesture', 'None')
             score = hand_data.get('score', 0.0)
             
-            # Check if this hand shows a control gesture
-            if gesture_name in LEFT_HAND_GESTURE_TO_FB and score > left_hand_score:
-                left_hand_score = score
-                left_hand_gesture = gesture_name
+            # Check if this gesture maps to a forward/backward command
+            mapped_command = self.gesture_mappings.get(gesture_name)
+            if mapped_command in ["FORWARD", "BACKWARD", "PAUSE"] and score > best_score:
+                best_score = score
+                best_gesture = gesture_name
+                best_command = mapped_command
         
-        if left_hand_gesture and left_hand_score > 0.5:  # Minimum confidence
-            mapped_command = LEFT_HAND_GESTURE_TO_FB.get(left_hand_gesture)
-            if mapped_command:
-                self.last_fb_seen_time = current_time
-                print(f"[DIRECTION] Hand {left_hand_gesture} -> {mapped_command}")
-                return mapped_command
+        if best_gesture and best_score > 0.5:  # Minimum confidence
+            self.last_fb_seen_time = current_time
+            print(f"[DIRECTION] Hand {best_gesture} -> {best_command}")
+            return best_command
         
         # Hold last command briefly
         if (current_time - self.last_fb_seen_time) <= FB_HOLD_SECONDS:
             return self.last_fb
         
         return None
+    
+    def _analyze_button_gestures(self, main_gesture_results, current_time) -> None:
+        """Analyze gestures for button commands (BUTTON_A, BUTTON_B, BUTTON_C)"""
+        if not main_gesture_results or 'all_hands_data' not in main_gesture_results:
+            # No gestures detected, reset button states
+            self.button_states = {'button_a': None, 'button_b': None, 'button_c': None}
+            return
+        
+        all_hands_data = main_gesture_results['all_hands_data']
+        
+        # Reset button states
+        new_button_states = {'button_a': None, 'button_b': None, 'button_c': None}
+        
+        # Check each hand for gestures mapped to button commands
+        for hand_data in all_hands_data:
+            gesture_name = hand_data.get('gesture', 'None')
+            score = hand_data.get('score', 0.0)
+            
+            if score < 0.5:  # Minimum confidence for button detection
+                continue
+            
+            # Check what command this gesture is mapped to
+            mapped_command = self.gesture_mappings.get(gesture_name, 'NONE')
+            
+            if mapped_command == 'BUTTON_A':
+                new_button_states['button_a'] = 'BUTTON_A'
+                print(f"[DIRECTION] Button A: {gesture_name} -> BUTTON_A")
+            elif mapped_command == 'BUTTON_B':
+                new_button_states['button_b'] = 'BUTTON_B'
+                print(f"[DIRECTION] Button B: {gesture_name} -> BUTTON_B")
+            elif mapped_command == 'BUTTON_C':
+                new_button_states['button_c'] = 'BUTTON_C'
+                print(f"[DIRECTION] Button C: {gesture_name} -> BUTTON_C")
+        
+        # Update button states and GUI if states changed
+        if self.button_states != new_button_states:
+            self.button_states = new_button_states
+            print(f"[DIRECTION] Button states updated: {self.button_states}")
+            self._update_button_gui()
+    
+    def _update_button_gui(self):
+        """Update GUI with current button states"""
+        try:
+            from direction_gui import direction_gui
+            # Update GUI with current movement commands and button states
+            direction_gui.update_commands(self.last_fb, self.last_lr, self.button_states)
+        except ImportError:
+            pass  # GUI not available
     
     def _handle_command_output(self, fb_command: Optional[str], lr_command: Optional[str], current_time: float):
         """Handle updating GUI and minimal console output for direction commands"""
@@ -320,7 +466,7 @@ class DirectionController:
                 # Update GUI if available
                 try:
                     from direction_gui import direction_gui
-                    direction_gui.update_commands(fb_command, lr_command)
+                    direction_gui.update_commands(fb_command, lr_command, self.button_states)
                 except ImportError:
                     pass  # GUI not available
                 

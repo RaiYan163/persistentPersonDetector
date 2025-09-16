@@ -92,6 +92,30 @@ def is_victory_gesture(gesture_categories):
     
     return False, 0.0
 
+def is_thumb_up(gesture_categories):
+    """Check if gesture is thumbs up."""
+    if not gesture_categories:
+        return False, 0.0
+    
+    for cat in gesture_categories:
+        name = (cat.category_name or "").lower().replace("-", "_").replace(" ", "_")
+        if name in ["thumb_up", "thumbs_up"]:
+            return True, float(cat.score)
+    
+    return False, 0.0
+
+def is_thumb_down(gesture_categories):
+    """Check if gesture is thumbs down."""
+    if not gesture_categories:
+        return False, 0.0
+    
+    for cat in gesture_categories:
+        name = (cat.category_name or "").lower().replace("-", "_").replace(" ", "_")
+        if name in ["thumb_down", "thumbs_down"]:
+            return True, float(cat.score)
+    
+    return False, 0.0
+
 class GestureDetector:
     """
     Handles hand gesture recognition using MediaPipe.
@@ -220,7 +244,9 @@ class GestureDetector:
             'gesture': 'None',
             'score': 0.0,
             'is_pointing_up': False,
-            'is_victory': False
+            'is_victory': False,
+            'is_thumb_up': False,
+            'is_thumb_down': False
         }
         
         if not all_gestures or hand_index >= len(all_gestures):
@@ -236,33 +262,30 @@ class GestureDetector:
         # Check for victory gesture
         is_victory, vic_score, vic_label = self._is_victory(gesture_categories)
         
-        # Prioritize between gestures if both detected
-        if is_pointing_up and is_victory:
-            if pu_score >= vic_score:
-                gesture_data.update({
-                    'gesture': pu_label,
-                    'score': pu_score,
-                    'is_pointing_up': True,
-                    'is_victory': False
-                })
-            else:
-                gesture_data.update({
-                    'gesture': vic_label,
-                    'score': vic_score,
-                    'is_pointing_up': False,
-                    'is_victory': True
-                })
-        elif is_pointing_up:
+        # Check for button gestures
+        thumb_up_detected, tu_score = is_thumb_up(gesture_categories)
+        thumb_down_detected, td_score = is_thumb_down(gesture_categories)
+        
+        # Find the highest scoring gesture among detected ones
+        detected_gestures = []
+        if is_pointing_up:
+            detected_gestures.append(('pointing_up', pu_score, pu_label, {'is_pointing_up': True}))
+        if is_victory:
+            detected_gestures.append(('victory', vic_score, vic_label, {'is_victory': True}))
+        if thumb_up_detected:
+            detected_gestures.append(('thumb_up', tu_score, 'Thumb_Up', {'is_thumb_up': True}))
+        if thumb_down_detected:
+            detected_gestures.append(('thumb_down', td_score, 'Thumb_Down', {'is_thumb_down': True}))
+        
+        if detected_gestures:
+            # Get the gesture with highest confidence
+            best_gesture = max(detected_gestures, key=lambda x: x[1])
+            gesture_type, score, label, flags = best_gesture
+            
             gesture_data.update({
-                'gesture': pu_label,
-                'score': pu_score,
-                'is_pointing_up': True
-            })
-        elif is_victory:
-            gesture_data.update({
-                'gesture': vic_label,
-                'score': vic_score,
-                'is_victory': True
+                'gesture': label,
+                'score': score,
+                **flags
             })
         else:
             # Get best gesture for display

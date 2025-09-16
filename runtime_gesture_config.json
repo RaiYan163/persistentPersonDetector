@@ -1,0 +1,15 @@
+{
+  "gesture_mappings": {
+    "Open_Palm": "BACKWARD",
+    "Closed_Fist": "FORWARD",
+    "Thumb_Up": "BUTTON_A",
+    "Thumb_Down": "BUTTON_B",
+    "Pointing_Up": "BUTTON_C",
+    "Right_Elbow_Extended": "RIGHT",
+    "Right_Elbow_Bent": "LEFT",
+    "Button_A_Thumb_Up": "NONE",
+    "Button_B_Thumb_Down": "NONE",
+    "Button_C_Pointing_Up": "NONE"
+  },
+  "applied_at": "2025-09-16 13:33:12.167963"
+}
