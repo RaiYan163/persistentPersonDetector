@@ -127,6 +127,10 @@ def parse_arguments():
     parser.add_argument("--fullscreen", action="store_true",
                        help="Start in fullscreen mode")
     
+    # Serial communication
+    parser.add_argument("--serial_port", type=str, default=None,
+                       help="Serial port for command streaming (e.g., COM3 or /dev/ttyUSB0). Auto-detects if not specified.")
+    
     # Debug options
     parser.add_argument("--debug", action="store_true",
                        help="Enable debug output")
@@ -146,8 +150,9 @@ class PersonLockSystem:
         self.initialize_components()
         self.start_time = time.time()
         
-        # Initialize direction controller
-        self.direction_controller = DirectionController()
+        # Initialize direction controller with serial communication
+        serial_port = getattr(args, 'serial_port', None)  # Get serial port from args if available
+        self.direction_controller = DirectionController(serial_port=serial_port)
         
         # Initialize gesture hold timers
         self.lock_timer = GestureHoldTimer()
@@ -233,6 +238,7 @@ class PersonLockSystem:
                 traceback.print_exc()
         finally:
             direction_gui.stop_gui()  # Stop GUI when application exits
+            self.direction_controller.cleanup()  # Cleanup serial connection
             cv2.destroyAllWindows()
             print("[SYSTEM] Shutdown complete")
     
@@ -793,7 +799,7 @@ class PersonLockSystem:
                 cv2.putText(frame, "POINTING UP to lock", (20, H - 50),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         
-        cv2.putText(frame, "r: reset | q: quit | f: fullscreen", (20, H - 20),
+        cv2.putText(frame, "r: reset | q: quit | f: fullscreen | h: serial test", (20, H - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.WHITE, 2)
     
     def handle_input(self) -> bool:
@@ -817,6 +823,13 @@ class PersonLockSystem:
             self.tracker.unlock_target()
         elif key == ord('f'):
             self.toggle_fullscreen()
+        elif key == ord('h'):
+            # Send serial heartbeat for testing
+            if self.direction_controller.is_serial_connected():
+                self.direction_controller.send_serial_heartbeat()
+                print(f"[UI] Serial info: {self.direction_controller.get_serial_info()}")
+            else:
+                print("[UI] Serial communication not connected")
         
         return True
     

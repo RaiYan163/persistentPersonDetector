@@ -20,6 +20,9 @@ torchvision>=0.13.0
 # GUI framework (for direction control display)
 tkinter  # Usually included with Python, but listed for completeness
 
+# Serial communication for command streaming
+pyserial>=3.5
+
 # Utilities
 urllib3>=1.26.0
 
