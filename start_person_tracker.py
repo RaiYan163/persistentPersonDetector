@@ -64,8 +64,6 @@ Examples:
                        help="Display height")
     parser.add_argument("--fullscreen", action="store_true",
                        help="Start in fullscreen mode")
-    parser.add_argument("--serial_port", type=str, default=None,
-                       help="Serial port for command streaming")
     parser.add_argument("--debug", action="store_true",
                        help="Enable debug output")
     
@@ -120,8 +118,6 @@ def start_main_application(args):
             main_args.extend(['--height', str(args.height)])
         if args.fullscreen:
             main_args.append('--fullscreen')
-        if args.serial_port:
-            main_args.extend(['--serial_port', args.serial_port])
         if args.debug:
             main_args.append('--debug')
         

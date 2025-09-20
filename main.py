@@ -4,7 +4,6 @@ import argparse
 import time
 import cv2
 import config
-
 class GestureHoldTimer:
     """
     Manages gesture hold timing with countdown display for locking/unlocking.
@@ -77,6 +76,9 @@ class GestureHoldTimer:
         
         elapsed = time.time() - self.start_time
         return min(1.0, elapsed / self.hold_duration)
+
+# Serial monitor thread removed - focusing only on button state changes
+
 from person_detector import PersonDetector
 from gesture_detector import GestureDetector
 from person_reid import PersonReID
@@ -92,6 +94,18 @@ from utils import (
     draw_locked_target, 
     draw_hud
 )
+from button_state_shared import (
+    get_button_state,
+    set_button_state,
+    set_button_pressed,
+    reset_button_state,
+    get_button_state_info,
+    set_button_position,
+    set_multiple_buttons,
+    get_button_position,
+    BUTTON_POSITIONS
+)
+from button_state_server import start_button_state_server, stop_button_state_server, get_server_status
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -127,9 +141,7 @@ def parse_arguments():
     parser.add_argument("--fullscreen", action="store_true",
                        help="Start in fullscreen mode")
     
-    # Serial communication
-    parser.add_argument("--serial_port", type=str, default=None,
-                       help="Serial port for command streaming (e.g., COM3 or /dev/ttyUSB0). Auto-detects if not specified.")
+    # Serial communication removed - will be implemented from scratch
     
     # Debug options
     parser.add_argument("--debug", action="store_true",
@@ -150,9 +162,8 @@ class PersonLockSystem:
         self.initialize_components()
         self.start_time = time.time()
         
-        # Initialize direction controller with serial communication
-        serial_port = getattr(args, 'serial_port', None)  # Get serial port from args if available
-        self.direction_controller = DirectionController(serial_port=serial_port)
+        # Initialize direction controller (serial communication removed)
+        self.direction_controller = DirectionController()
         
         # Initialize gesture hold timers
         self.lock_timer = GestureHoldTimer()
@@ -161,9 +172,25 @@ class PersonLockSystem:
         # Start the direction GUI
         direction_gui.start_gui()
         
+        # Start button state server for external monitoring
+        start_button_state_server()
+        
+        # Give server time to initialize
+        time.sleep(0.1)
+        
+        # Test button state access
+        current_button_state = get_button_state()
+        print(f"[SYSTEM] Button state access test: {current_button_state.strip()}")
+        
         print("[SYSTEM] Person Lock System initialized with PERSISTENT ReID tracking")
         print("[SYSTEM] Security: High-confidence persistent person identification")
         print("[SYSTEM] Features: Survives occlusions, prevents false positives, 15s timeout")
+        
+        # Display server status
+        server_status = get_server_status()
+        socket_status = "bound" if server_status['socket_bound'] else "starting"
+        print(f"[SYSTEM] Button state server: {server_status['host']}:{server_status['port']} ({socket_status}, clients: {server_status['clients']})")
+        print("[SYSTEM] Use 'python button_state_client.py' in another terminal to monitor button states")
         
         # Display current locking mode
         if config.LOCKING_MODE == "FIST_PALM":
@@ -238,7 +265,8 @@ class PersonLockSystem:
                 traceback.print_exc()
         finally:
             direction_gui.stop_gui()  # Stop GUI when application exits
-            self.direction_controller.cleanup()  # Cleanup serial connection
+            self.direction_controller.cleanup()  # Cleanup direction controller
+            stop_button_state_server()  # Stop button state server
             cv2.destroyAllWindows()
             print("[SYSTEM] Shutdown complete")
     
@@ -799,7 +827,7 @@ class PersonLockSystem:
                 cv2.putText(frame, "POINTING UP to lock", (20, H - 50),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, config.YELLOW, 2)
         
-        cv2.putText(frame, "r: reset | q: quit | f: fullscreen | h: serial test", (20, H - 20),
+        cv2.putText(frame, "r: reset | q: quit | f: fullscreen | h: help", (20, H - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, config.WHITE, 2)
     
     def handle_input(self) -> bool:
@@ -824,12 +852,8 @@ class PersonLockSystem:
         elif key == ord('f'):
             self.toggle_fullscreen()
         elif key == ord('h'):
-            # Send serial heartbeat for testing
-            if self.direction_controller.is_serial_connected():
-                self.direction_controller.send_serial_heartbeat()
-                print(f"[UI] Serial info: {self.direction_controller.get_serial_info()}")
-            else:
-                print("[UI] Serial communication not connected")
+            # Serial communication removed
+            print("[UI] Serial communication removed - will be implemented from scratch")
         
         return True
     

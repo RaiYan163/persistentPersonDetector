@@ -14,14 +14,47 @@ from mediapipe import Image, ImageFormat
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 import config
+from button_state_shared import set_button_position, set_button_state
 
-# Serial communication
-try:
-    import serial
-    SERIAL_AVAILABLE = True
-except ImportError:
-    SERIAL_AVAILABLE = False
-    print("[SERIAL] Warning: pyserial not installed. Install with: pip install pyserial")
+# Serial communication removed - will be implemented from scratch
+
+def update_button_state_from_gestures(active_gestures, revert_time=0.05):
+    """
+    Update button state based on all active gestures at once
+    Builds complete string like "1000100000\n" and auto-reverts
+    """
+    # Build the complete button state string
+    button_state = ["0"] * 10  # Start with all zeros
+    
+    # Set positions based on active gestures
+    for gesture in active_gestures:
+        if gesture == "FORWARD":
+            button_state[0] = "1"
+        elif gesture == "RIGHT":
+            button_state[1] = "1"
+        elif gesture == "BACKWARD":
+            button_state[2] = "1"
+        elif gesture == "LEFT":
+            button_state[3] = "1"
+        elif gesture == "BUTTON_A":
+            button_state[4] = "1"
+        elif gesture == "BUTTON_B":
+            button_state[5] = "1"
+        elif gesture == "BUTTON_C":
+            button_state[6] = "1"
+    
+    # Set the complete button state
+    complete_state = "".join(button_state) + "\n"
+    set_button_state(complete_state)
+    
+    # Auto-revert to all zeros after specified time
+    def revert():
+        set_button_state("0000000000\n")
+    
+    # Use a simple timer for auto-revert
+    import threading
+    timer = threading.Timer(revert_time, revert)
+    timer.start()
 
 # Model URLs and paths
 POSE_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
@@ -33,21 +66,7 @@ HAND_PATH = "hand_landmarker.task"
 GESTURE_URL = "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task"
 GESTURE_PATH = "gesture_recognizer.task"
 
-# Serial communication configuration
-SERIAL_BAUD_RATE = 115200  # Change to your desired baud rate
-SERIAL_PORT = "COM10"  # Default COM port (change to your Arduino port)
-SERIAL_TIMEOUT = 0.1  # 100ms timeout
-SERIAL_COMMAND_MAP = {
-    None: 0,           # Default/no command
-    "FORWARD": 1,      # Forward movement  
-    "RIGHT": 2,        # Right movement
-    "BACKWARD": 3,     # Backward movement
-    "LEFT": 4,         # Left movement
-    "BUTTON_A": 5,     # Button A
-    "BUTTON_B": 6,     # Button B  
-    "BUTTON_C": 7,     # Button C
-    "PAUSE": 0         # Pause maps to default
-}
+# Serial communication configuration removed - will be implemented from scratch
 
 # Direction control configuration - Dynamic gesture mapping
 def load_gesture_mappings():
@@ -89,214 +108,7 @@ def load_gesture_mappings():
 # Load gesture mappings (will be reloaded when controller is initialized)
 GESTURE_MAPPINGS = load_gesture_mappings()
 
-class SerialController:
-    """
-    Handles serial communication for streaming gesture commands.
-    Streams command codes at 115200 baud rate.
-    """
-    
-    def __init__(self, port: str = None, baud_rate: int = SERIAL_BAUD_RATE):
-        """
-        Initialize serial controller.
-        
-        Args:
-            port: Serial port (default: SERIAL_PORT from config)
-            baud_rate: Communication baud rate (default: SERIAL_BAUD_RATE from config)
-        """
-        self.serial_port = None
-        self.port = port
-        self.baud_rate = baud_rate
-        self.last_command_code = 0  # Track last sent command to avoid spam
-        self.last_default_send_time = 0.0  # Track when we last sent default command
-        self.default_send_interval = 0.5  # Send default every 500ms when no commands
-        
-        if not SERIAL_AVAILABLE:
-            print("[SERIAL] pyserial not available - serial communication disabled")
-            return
-        
-        # Use default port if not specified
-        if port is None:
-            port = SERIAL_PORT
-            print(f"[SERIAL] Using default port: {port}")
-        
-        # Try to auto-detect if default port fails
-        if not self._test_port(port):
-            print(f"[SERIAL] Default port {port} not available, trying auto-detection...")
-            detected_port = self._auto_detect_port()
-            if detected_port:
-                port = detected_port
-        
-        if port:
-            self._connect(port)
-        else:
-            print("[SERIAL] No serial port specified - serial communication disabled")
-            print("[SERIAL] To enable: specify port in config or auto-detection")
-    
-    def _auto_detect_port(self) -> Optional[str]:
-        """Try to auto-detect available serial ports"""
-        try:
-            import serial.tools.list_ports
-            ports = serial.tools.list_ports.comports()
-            
-            if ports:
-                # Prefer Arduino/microcontroller ports
-                for port in ports:
-                    description = port.description.lower()
-                    if any(keyword in description for keyword in ['arduino', 'usb', 'serial']):
-                        print(f"[SERIAL] Auto-detected port: {port.device} ({port.description})")
-                        return port.device
-                
-                # Fallback to first available port
-                first_port = ports[0]
-                print(f"[SERIAL] Using first available port: {first_port.device} ({first_port.description})")
-                return first_port.device
-            else:
-                print("[SERIAL] No serial ports detected")
-                return None
-                
-        except Exception as e:
-            print(f"[SERIAL] Port detection error: {e}")
-            return None
-    
-    def _test_port(self, port: str) -> bool:
-        """Test if a port is available"""
-        try:
-            import serial.tools.list_ports
-            ports = serial.tools.list_ports.comports()
-            return any(p.device == port for p in ports)
-        except:
-            return False
-    
-    def _connect(self, port: str):
-        """Connect to serial port"""
-        try:
-            self.serial_port = serial.Serial(
-                port=port,
-                baudrate=self.baud_rate,
-                timeout=SERIAL_TIMEOUT,
-                write_timeout=SERIAL_TIMEOUT
-            )
-            print(f"[SERIAL] Connected to {port} at {self.baud_rate} baud")
-            
-            # Send initial default command
-            self.send_command_code(0)
-            
-        except Exception as e:
-            print(f"[SERIAL] Failed to connect to {port}: {e}")
-            print("[SERIAL] Serial communication disabled")
-            self.serial_port = None
-    
-    def send_command_code(self, command_code: int, force: bool = False):
-        """
-        Send command code to serial port.
-        
-        Args:
-            command_code: Integer command code (0-7)
-            force: Force send even if same as last command (for reset scenarios)
-        """
-        if not self.serial_port or not self.serial_port.is_open:
-            return
-        
-        # Only send if command changed to reduce serial traffic (unless forced)
-        if command_code != self.last_command_code or force:
-            try:
-                # Send as ASCII character (like send.py)
-                command_str = str(command_code)
-                print(f"[SERIAL] Before Sending command: '{command_str}' (ASCII: {ord(command_str)})")
-                self.serial_port.write(command_str.encode())  # Send ASCII character
-                print(f"[SERIAL] After Sending command: '{command_str}' (ASCII: {ord(command_str)})")
-                self.serial_port.flush()  # Ensure immediate transmission
-                
-                self.last_command_code = command_code
-                
-            except Exception as e:
-                print(f"[SERIAL] Send error: {e}")
-                # Try to reconnect on error
-                self._reconnect()
-    
-    def send_commands(self, fb_command: Optional[str], lr_command: Optional[str], button_states: Dict):
-        """
-        Send movement and button commands via serial.
-        Priority: Button > Forward/Backward > Left/Right > Default
-        
-        Args:
-            fb_command: Forward/backward command
-            lr_command: Left/right command  
-            button_states: Dictionary of button states
-        """
-        import time
-        current_time = time.time()
-        
-        # Check for button commands first (highest priority)
-        for button_name, button_state in button_states.items():
-            if button_state is not None:
-                command_code = SERIAL_COMMAND_MAP.get(button_state, 0)
-                self.send_command_code(command_code)
-                return
-        
-        # Check for forward/backward commands (medium priority)
-        if fb_command and fb_command in SERIAL_COMMAND_MAP:
-            command_code = SERIAL_COMMAND_MAP[fb_command]
-            self.send_command_code(command_code)
-            return
-        
-        # Check for left/right commands (lower priority)
-        if lr_command and lr_command in SERIAL_COMMAND_MAP:
-            command_code = SERIAL_COMMAND_MAP[lr_command]
-            self.send_command_code(command_code)
-            return
-        
-        # No commands - send default periodically to ensure connection is alive
-        if (current_time - self.last_default_send_time) >= self.default_send_interval:
-            self.send_command_code(0)
-            self.last_default_send_time = current_time
-    
-    def _reconnect(self):
-        """Try to reconnect to serial port"""
-        if self.serial_port:
-            try:
-                self.serial_port.close()
-            except:
-                pass
-        
-        if self.port:
-            print(f"[SERIAL] Attempting to reconnect to {self.port}...")
-            self._connect(self.port)
-    
-    def close(self):
-        """Close serial connection"""
-        if self.serial_port and self.serial_port.is_open:
-            try:
-                # Send default command before closing
-                self.send_command_code(0)
-                self.serial_port.close()
-                print("[SERIAL] Serial connection closed")
-            except Exception as e:
-                print(f"[SERIAL] Error closing connection: {e}")
-    
-    def is_connected(self) -> bool:
-        """Check if serial port is connected"""
-        return self.serial_port is not None and self.serial_port.is_open
-    
-    def send_heartbeat(self):
-        """Send a heartbeat/default command to verify connection"""
-        self.send_command_code(0)
-        print("[SERIAL] Heartbeat sent (command: 0)")
-    
-    def get_connection_info(self) -> str:
-        """Get connection status information"""
-        if not self.serial_port:
-            return "Not connected"
-        elif self.serial_port.is_open:
-            return f"Connected to {self.port} at {self.baud_rate} baud"
-        else:
-            return f"Port {self.port} closed"
-    
-    def force_reset(self):
-        """Force reset the serial controller state and send default command"""
-        self.last_command_code = -1  # Force different from 0
-        self.send_command_code(0, force=True)
-        print("[SERIAL] Force reset - sent default command '0'")
+# SerialController class removed - will be implemented from scratch
 
 # Control parameters
 FB_HOLD_SECONDS = 0.8  # Hold last command briefly on dropouts
@@ -334,15 +146,14 @@ class DirectionController:
     Analyzes only the locked person's bounding box region for commands.
     """
     
-    def __init__(self, serial_port: str = None):
-        """Initialize the direction controller with MediaPipe models and serial communication"""
+    def __init__(self):
+        """Initialize the direction controller with MediaPipe models"""
         self.initialize_models()
         
         # Load current gesture mappings
         self.gesture_mappings = load_gesture_mappings()
         
-        # Initialize serial communication
-        self.serial_controller = SerialController(port=serial_port)
+        # Serial communication removed - will be implemented from scratch
         
         # Direction control state
         self.last_fb = None
@@ -465,6 +276,10 @@ class DirectionController:
             # Run MediaPipe POSE analysis on cropped region (still needed for elbow angle)
             pose_result = self.pose_detector.detect_for_video(mp_img, ts_ms)
             
+            # Debug: Check if pose detection is working
+            if pose_result.pose_landmarks:
+                print(f"[DIRECTION] Pose detected: {len(pose_result.pose_landmarks[0])} landmarks")
+            
             # Analyze pose for left/right control
             lr_command = self._analyze_pose_for_lr(pose_result, person_crop.shape)
             
@@ -474,7 +289,7 @@ class DirectionController:
                 fb_command = self._analyze_main_gestures_for_fb(main_gesture_results, current_time)
             
             # Analyze button gestures from main gesture results
-            self._analyze_button_gestures(main_gesture_results, current_time)
+            self._analyze_button_gestures(main_gesture_results, current_time, lr_command)
             
             # Check for command changes and print
             self._handle_command_output(fb_command, lr_command, current_time)
@@ -498,6 +313,11 @@ class DirectionController:
         
         landmarks = pose_result.pose_landmarks[0]
         h, w = crop_shape[:2]
+        
+        # Debug: Check if we have enough landmarks
+        if len(landmarks) < 17:
+            print(f"[DIRECTION] Warning: Only {len(landmarks)} pose landmarks detected (need 17+)")
+            return self.last_lr
         
         try:
             # Check both right and left elbow based on user configuration
@@ -526,6 +346,11 @@ class DirectionController:
                 mapped_command = self.gesture_mappings.get(right_gesture)
                 if mapped_command in ["LEFT", "RIGHT", "PAUSE"]:
                     best_command = mapped_command
+                    print(f"[DIRECTION] Right elbow {right_gesture} (angle: {smoothed_angle:.1f}°) -> {mapped_command}")
+                    
+                    # Button state will be updated in _analyze_button_gestures
+            else:
+                print(f"[DIRECTION] Right elbow angle calculation failed")
             
             # Left arm landmarks: shoulder(11) -> elbow(13) -> wrist(15)
             try:
@@ -547,6 +372,8 @@ class DirectionController:
                     mapped_command = self.gesture_mappings.get(left_gesture)
                     if mapped_command in ["LEFT", "RIGHT", "PAUSE"] and not best_command:
                         best_command = mapped_command
+                        
+                        # Button state will be updated in _analyze_button_gestures
                         
             except (IndexError, AttributeError):
                 pass  # Left arm not visible
@@ -593,6 +420,9 @@ class DirectionController:
             if mapped_command and mapped_command in ["FORWARD", "BACKWARD", "PAUSE"]:
                 self.last_fb_seen_time = current_time
                 print(f"[DIRECTION] Left hand {gesture_name} -> {mapped_command}")
+                
+                # Button state will be updated in _analyze_button_gestures
+                
                 return mapped_command
         
         # Hold last command briefly
@@ -641,8 +471,8 @@ class DirectionController:
         
         return None
     
-    def _analyze_button_gestures(self, main_gesture_results, current_time) -> None:
-        """Analyze gestures for button commands (BUTTON_A, BUTTON_B, BUTTON_C)"""
+    def _analyze_button_gestures(self, main_gesture_results, current_time, pose_command=None) -> None:
+        """Analyze gestures for button commands and update button state"""
         if not main_gesture_results or 'all_hands_data' not in main_gesture_results:
             # No gestures detected, reset button states
             self.button_states = {'button_a': None, 'button_b': None, 'button_c': None}
@@ -650,38 +480,47 @@ class DirectionController:
         
         all_hands_data = main_gesture_results['all_hands_data']
         
-        # Reset button states
-        new_button_states = {'button_a': None, 'button_b': None, 'button_c': None}
+        # Collect all active gestures
+        active_gestures = []
         
-        # Check each hand for gestures mapped to button commands
+        # Add pose-based command if available
+        if pose_command and pose_command in ['LEFT', 'RIGHT']:
+            active_gestures.append(pose_command)
+            print(f"[DIRECTION] Pose command: {pose_command}")
+        
+        # Check each hand for gestures mapped to commands
         for hand_data in all_hands_data:
             gesture_name = hand_data.get('gesture', 'None')
             score = hand_data.get('score', 0.0)
             
-            if score < 0.5:  # Minimum confidence for button detection
+            if score < 0.5:  # Minimum confidence for gesture detection
                 continue
             
             # Check what command this gesture is mapped to
             mapped_command = self.gesture_mappings.get(gesture_name, 'NONE')
             
-            if mapped_command == 'BUTTON_A':
+            if mapped_command in ['FORWARD', 'BACKWARD', 'LEFT', 'RIGHT', 'BUTTON_A', 'BUTTON_B', 'BUTTON_C']:
+                active_gestures.append(mapped_command)
+                print(f"[DIRECTION] {gesture_name} -> {mapped_command}")
+        
+        # Update button state with all active gestures at once
+        if active_gestures:
+            update_button_state_from_gestures(active_gestures)
+        
+        # Update internal button states for GUI
+        new_button_states = {'button_a': None, 'button_b': None, 'button_c': None}
+        for gesture in active_gestures:
+            if gesture == 'BUTTON_A':
                 new_button_states['button_a'] = 'BUTTON_A'
-                print(f"[DIRECTION] Button A: {gesture_name} -> BUTTON_A")
-            elif mapped_command == 'BUTTON_B':
+            elif gesture == 'BUTTON_B':
                 new_button_states['button_b'] = 'BUTTON_B'
-                print(f"[DIRECTION] Button B: {gesture_name} -> BUTTON_B")
-            elif mapped_command == 'BUTTON_C':
+            elif gesture == 'BUTTON_C':
                 new_button_states['button_c'] = 'BUTTON_C'
-                print(f"[DIRECTION] Button C: {gesture_name} -> BUTTON_C")
         
         # Update button states and GUI if states changed
         if self.button_states != new_button_states:
             self.button_states = new_button_states
             print(f"[DIRECTION] Button states updated: {self.button_states}")
-            
-            # Send button commands immediately via serial
-            self.serial_controller.send_commands(self.last_fb, self.last_lr, self.button_states)
-            
             self._update_button_gui()
     
     def _update_button_gui(self):
@@ -694,7 +533,7 @@ class DirectionController:
             pass  # GUI not available
     
     def _handle_command_output(self, fb_command: Optional[str], lr_command: Optional[str], current_time: float):
-        """Handle updating GUI, serial output, and minimal console output for direction commands"""
+        """Handle updating GUI and minimal console output for direction commands"""
         if (fb_command != self.last_fb) or (lr_command != self.last_lr):
             if (current_time - self.last_print_time) >= PRINT_COOLDOWN:
                 fb_text = fb_command if fb_command is not None else "None"
@@ -703,8 +542,7 @@ class DirectionController:
                 # Simple console output - just the commands
                 print(f"{fb_text}, {lr_text}")
                 
-                # Send commands via serial
-                self.serial_controller.send_commands(fb_command, lr_command, self.button_states)
+                # Serial communication removed - will be implemented from scratch
                 
                 # Update GUI if available
                 try:
@@ -799,25 +637,23 @@ class DirectionController:
         self.button_states = {'button_a': None, 'button_b': None, 'button_c': None}
         self.right_angle_buf.clear()
         
-        # Force reset serial controller and send default command
-        self.serial_controller.force_reset()
+        # Serial communication removed - will be implemented from scratch
         
         print("[DIRECTION] Direction control state reset")
     
     def cleanup(self):
-        """Cleanup resources including serial connection"""
+        """Cleanup resources"""
         self.reset_state()
-        self.serial_controller.close()
         print("[DIRECTION] Direction controller cleanup completed")
     
     def is_serial_connected(self) -> bool:
-        """Check if serial communication is active"""
-        return self.serial_controller.is_connected()
+        """Check if serial communication is active - removed for now"""
+        return False
     
     def send_serial_heartbeat(self):
-        """Send a heartbeat to verify serial connection"""
-        self.serial_controller.send_heartbeat()
+        """Send a heartbeat to verify serial connection - removed for now"""
+        print("[DIRECTION] Serial communication removed")
     
     def get_serial_info(self) -> str:
-        """Get serial connection information"""
-        return self.serial_controller.get_connection_info()
+        """Get serial connection information - removed for now"""
+        return "Serial communication removed"
