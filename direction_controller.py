@@ -18,11 +18,15 @@ from button_state_shared import set_button_position, set_button_state
 
 # Serial communication removed - will be implemented from scratch
 
-def update_button_state_from_gestures(active_gestures, revert_time=0.05):
+def update_button_state_from_gestures(active_gestures, revert_time=None):
     """
     Update button state based on all active gestures at once
     Builds complete string like "1000100000\n" and auto-reverts
     """
+    # Use config value if revert_time not specified
+    if revert_time is None:
+        revert_time = config.BUTTON_STATE_REVERT_TIME
+    
     # Build the complete button state string
     button_state = ["0"] * 10  # Start with all zeros
     

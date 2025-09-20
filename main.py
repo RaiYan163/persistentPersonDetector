@@ -114,7 +114,7 @@ def parse_arguments():
     )
     
     # Video source
-    parser.add_argument("--source", type=str, default="0", 
+    parser.add_argument("--source", type=str, default=str(config.DEFAULT_CAMERA), 
                        help="Camera index or path to video file")
     
     # Detection parameters

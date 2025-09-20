@@ -37,6 +37,9 @@ DUAL_VICTORY_REQUIRED_HANDS = 2         # Must detect exactly 2 hands
 GESTURE_HOLD_DURATION = 2.0             # Seconds to hold gesture for locking/unlocking
 COUNTDOWN_UPDATE_INTERVAL = 0.1         # How often to update countdown (100ms)
 
+# Button state auto-revert timing
+BUTTON_STATE_REVERT_TIME = 0.03         # Seconds before button state auto-reverts (50ms)
+
 # ReID settings for persistent tracking
 DEFAULT_SIM_THRESH = 0.30    # Base similarity threshold (not used directly)
 DEFAULT_LOSS_TIMEOUT = 15.0  # Seconds before auto-unlock (CHANGED from 5.0 to 15.0)
@@ -59,6 +62,9 @@ GRAY = (100, 100, 100)
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
 DEFAULT_TRACKER = "bytetrack.yaml"
+
+# Camera settings
+DEFAULT_CAMERA = 0  # Default camera index (0 for first camera, 1 for second, etc.)
 
 # Gesture association settings
 BOX_EXPANSION_FACTOR = 0.4   # Expand bounding box by 40%

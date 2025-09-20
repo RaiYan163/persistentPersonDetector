@@ -17,6 +17,7 @@ Usage:
 import argparse
 import sys
 import os
+import config
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -46,21 +47,21 @@ Examples:
     )
     
     # Pass-through arguments for main.py
-    parser.add_argument("--source", type=str, default="0", 
+    parser.add_argument("--source", type=str, default=str(config.DEFAULT_CAMERA), 
                        help="Camera index or video file path")
-    parser.add_argument("--conf", type=float, default=0.5,
+    parser.add_argument("--conf", type=float, default=config.DEFAULT_CONF,
                        help="YOLO confidence threshold")
-    parser.add_argument("--sim", type=float, default=0.30,
+    parser.add_argument("--sim", type=float, default=config.DEFAULT_SIM_THRESH,
                        help="ReID similarity threshold")
-    parser.add_argument("--gesture_conf", type=float, default=0.50,
+    parser.add_argument("--gesture_conf", type=float, default=config.DEFAULT_GESTURE_CONF,
                        help="Gesture detection confidence")
     parser.add_argument("--device", type=str, default="cpu",
                        help="Device for ReID model (cpu/cuda)")
-    parser.add_argument("--loss_timeout", type=float, default=15.0,
+    parser.add_argument("--loss_timeout", type=float, default=config.DEFAULT_LOSS_TIMEOUT,
                        help="Seconds before auto-unlock")
-    parser.add_argument("--width", type=int, default=1280,
+    parser.add_argument("--width", type=int, default=config.DEFAULT_WIDTH,
                        help="Display width")
-    parser.add_argument("--height", type=int, default=720,
+    parser.add_argument("--height", type=int, default=config.DEFAULT_HEIGHT,
                        help="Display height")
     parser.add_argument("--fullscreen", action="store_true",
                        help="Start in fullscreen mode")
@@ -100,21 +101,21 @@ def start_main_application(args):
         # Prepare sys.argv for main.py
         main_args = ['main.py']
         
-        if args.source != "0":
+        if args.source != str(config.DEFAULT_CAMERA):
             main_args.extend(['--source', str(args.source)])
-        if args.conf != 0.5:
+        if args.conf != config.DEFAULT_CONF:
             main_args.extend(['--conf', str(args.conf)])
-        if args.sim != 0.30:
+        if args.sim != config.DEFAULT_SIM_THRESH:
             main_args.extend(['--sim', str(args.sim)])
-        if args.gesture_conf != 0.50:
+        if args.gesture_conf != config.DEFAULT_GESTURE_CONF:
             main_args.extend(['--gesture_conf', str(args.gesture_conf)])
         if args.device != "cpu":
             main_args.extend(['--device', args.device])
-        if args.loss_timeout != 15.0:
+        if args.loss_timeout != config.DEFAULT_LOSS_TIMEOUT:
             main_args.extend(['--loss_timeout', str(args.loss_timeout)])
-        if args.width != 1280:
+        if args.width != config.DEFAULT_WIDTH:
             main_args.extend(['--width', str(args.width)])
-        if args.height != 720:
+        if args.height != config.DEFAULT_HEIGHT:
             main_args.extend(['--height', str(args.height)])
         if args.fullscreen:
             main_args.append('--fullscreen')
